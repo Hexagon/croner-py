@@ -248,6 +248,16 @@ python -m pytest
 `tools/compare_with_js.py` compares random patterns with croner (JavaScript), run from source with
 Node.js, see the script for details.
 
+## Other implementations
+
+Croner is available in several languages. The implementations share pattern syntax, DST rules and test cases:
+
+- **JavaScript / TypeScript**: [croner](https://github.com/Hexagon/croner), Node, Deno, Bun and browsers, on [npm](https://www.npmjs.com/package/croner) and [JSR](https://jsr.io/@hexagon/croner)
+- **Rust**: [croner-rust](https://github.com/Hexagon/croner-rust), on [crates.io](https://crates.io/crates/croner)
+- **Python**: croner-py (this repository)
+- **.NET**: [croner-dotnet](https://github.com/Hexagon/croner-dotnet), on [NuGet](https://www.nuget.org/packages/Croner)
+- **C++**: [croner-cpp](https://github.com/Hexagon/croner-cpp), header-only, C++17
+
 ## License
 
 MIT License
