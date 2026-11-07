@@ -1,5 +1,7 @@
 # Croner - Cron for Python
 
+Croner is available for [JavaScript/TypeScript](https://github.com/Hexagon/croner) · [Rust](https://github.com/Hexagon/croner-rust) · **Python** · [.NET](https://github.com/Hexagon/croner-dotnet) · [C++](https://github.com/Hexagon/croner-cpp)
+
 Trigger functions or evaluate cron expressions in Python. No dependencies. Most features. Python 3.9+.
 
 This is the Python flavor of [croner](https://github.com/hexagon/croner) (JavaScript/TypeScript) and
@@ -247,16 +249,6 @@ python -m pytest
 
 `tools/compare_with_js.py` compares random patterns with croner (JavaScript), run from source with
 Node.js, see the script for details.
-
-## Other implementations
-
-Croner is available in several languages. The implementations share pattern syntax, DST rules and test cases:
-
-- **JavaScript / TypeScript**: [croner](https://github.com/Hexagon/croner), Node, Deno, Bun and browsers, on [npm](https://www.npmjs.com/package/croner) and [JSR](https://jsr.io/@hexagon/croner)
-- **Rust**: [croner-rust](https://github.com/Hexagon/croner-rust), on [crates.io](https://crates.io/crates/croner)
-- **Python**: croner-py (this repository)
-- **.NET**: [croner-dotnet](https://github.com/Hexagon/croner-dotnet), on [NuGet](https://www.nuget.org/packages/Croner)
-- **C++**: [croner-cpp](https://github.com/Hexagon/croner-cpp), header-only, C++17
 
 ## License
 
