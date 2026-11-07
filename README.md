@@ -1,5 +1,7 @@
 # Croner - Cron for Python
 
+Croner is available for [JavaScript/TypeScript](https://github.com/Hexagon/croner) · [Rust](https://github.com/Hexagon/croner-rust) · **Python** · [.NET](https://github.com/Hexagon/croner-dotnet) · [C++](https://github.com/Hexagon/croner-cpp)
+
 Trigger functions or evaluate cron expressions in Python. No dependencies. Most features. Python 3.9+.
 
 This is the Python flavor of [croner](https://github.com/hexagon/croner) (JavaScript/TypeScript) and
