@@ -1,7 +1,7 @@
 """Croner - cron for Python.
 
-A Python port of croner (JavaScript) and croner-rust: parse and evaluate cron
-patterns, enumerate runs across time zones and DST, and schedule functions.
+Parse and evaluate cron patterns, enumerate runs across time zones and DST,
+and schedule functions.
 
 >>> from croner import Cron
 >>> job = Cron("0 12 * * MON-FRI", timezone="Europe/Stockholm")

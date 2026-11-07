@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "croner"
 dynamic = ["version"]
-description = "Cron for Python. Parse and evaluate cron patterns, enumerate runs across time zones and DST, and schedule functions. A port of croner (JavaScript) and croner-rust, without dependencies."
+description = "Cron for Python. Parse and evaluate cron patterns, enumerate runs across time zones and DST, and schedule functions. No dependencies."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
