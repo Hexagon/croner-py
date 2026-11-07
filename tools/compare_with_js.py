@@ -8,7 +8,7 @@ compares next_runs, previous_runs and match with croner (JS), run from source wi
 Needs Node.js >= 22.6 and a checkout of https://github.com/Hexagon/croner, by default next
 to this repository, or set CRONER_JS to the path of its src/croner.ts.
 
-croner (JS) <= 10.x skips a match after February 29 for some day-of-month patterns, where it
+croner (JS) 10.x and 11.0 skip a match after February 29 for some day-of-month patterns, where it
 overflows into March. Those differences are reported separately, after checking that the
 Python answer is the earlier, valid one.
 """

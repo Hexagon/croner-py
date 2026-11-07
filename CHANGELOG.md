@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1
+
+- Fixed `pytz` time zones passed as `timezone`. They were used without `localize()`, which gives
+  local mean time, so `0 12 * * *` in `pytz.timezone("Europe/Stockholm")` ran at 13:07. They are now
+  read through `zoneinfo`.
+- Fixed `@weekly` with `alternative_weekdays=True` raising `CronError`. It runs on Sundays, like
+  croner-rust.
+- `interval` with a `start_at` far in the past is much faster: the runs since `start_at` are no longer
+  walked one by one on days without a DST change. A year of runs every other second took about a
+  minute and a half, now under two seconds. The runs are the same.
+- Documented the deviations from OCPS, and how wildcard steps in the year field count.
+
 ## 1.0.0
 
 First release. A Python port of [croner](https://github.com/hexagon/croner) (JavaScript) and

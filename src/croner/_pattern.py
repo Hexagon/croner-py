@@ -442,9 +442,10 @@ class CronPattern:
             conf = re.sub(re.escape(name), value, conf, flags=re.IGNORECASE)
         return conf
 
-    @staticmethod
-    def _handle_nicknames(pattern: str) -> str:
+    def _handle_nicknames(self, pattern: str) -> str:
         clean = pattern.strip().lower()
+        if clean == "@weekly" and self.alternative_weekdays:
+            return "0 0 * * 1"  # Sunday is 1 with Quartz-style weekdays
         if clean == "@reboot":
             raise CronError(
                 "CronPattern: @reboot is not supported in this environment. "

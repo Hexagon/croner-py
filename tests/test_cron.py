@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 
 import pytest
 
@@ -58,6 +58,58 @@ def test_interval_with_start_at_in_the_future():
     assert fmt([job.next_run()]) == ["2099-01-01 00:00:00"]
 
 
+def _walk_runs_from(job, start_at, now):
+    """The runs from start_at one by one, as _calculate_previous_run did before it skipped days."""
+    step = timedelta(seconds=job.interval)
+    previous = start_at
+    while previous + step <= now:
+        nxt = job._walk(previous, previous, 1, True)
+        if nxt is None:
+            break
+        previous = nxt
+    return previous
+
+
+@pytest.mark.parametrize(
+    "pattern,interval,tz",
+    [
+        ("* * * * * *", 2, "UTC"),
+        ("* * * * * *", 7, "Europe/Stockholm"),
+        ("*/13 */3 * * * *", 61, "America/New_York"),
+        ("0 * 9-17 * * 1-5", 3599, "Europe/London"),
+        ("0 30 2 * * *", 3600, "America/New_York"),
+        ("* * 0-2 * * *", 13, "Australia/Lord_Howe"),
+        ("0 0,30 1,2,3 * * *", 300, "Europe/Stockholm"),
+        ("*/20 * 23 L * *", 45, "Pacific/Chatham"),
+        ("* * * * * *", 86399, "UTC"),
+    ],
+)
+def test_interval_with_start_at_in_the_past_skips_days_exactly(pattern, interval, tz):
+    job = Cron(pattern, interval=interval, timezone=tz)
+    # Days to weeks across the spring forward and fall back of each zone
+    days = 4 if interval < 10 else 40
+    for now in (
+        "2025-03-31T10:20:30Z",
+        "2025-04-08T00:00:00Z",
+        "2025-10-29T12:00:00Z",
+        "2025-11-04T03:04:05Z",
+    ):
+        now = datetime.fromisoformat(now.replace("Z", "+00:00"))
+        start_at = now - timedelta(days=days, seconds=4321)
+        assert job._calculate_previous_run(start_at, now) == _walk_runs_from(job, start_at, now)
+
+
+def test_interval_with_start_at_long_ago():
+    # Runs from start_at every other second, a year of them, without walking every run
+    now = datetime(2025, 6, 1, 12, 0, 1, tzinfo=UTC)
+    job = Cron(
+        "* * * * * *", interval=2, timezone="Europe/Stockholm", start_at=now - timedelta(days=365)
+    )
+    # Checked against walking every run. The repeated hour in October shifts the runs by a
+    # second, from odd to even seconds.
+    assert job._calculate_previous_run(job.start_at, now) == datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+
 def test_max_runs_limits_next_runs():
     job = Cron("* * * * * *", max_runs=2)
     assert len(job.next_runs(10)) == 2
@@ -97,6 +149,42 @@ def test_tzinfo_object_as_timezone():
 
     job = Cron("0 0 12 * * *", timezone=ZoneInfo("Europe/Stockholm"))
     assert fmt([job.next_run("2024-01-01T00:00:00Z")]) == ["2024-01-01 11:00:00"]
+
+
+class _PytzLike(tzinfo):
+    """Mimics a pytz zone: its own offset is local mean time, right offsets need localize()."""
+
+    zone = "Europe/Stockholm"
+
+    def localize(self, dt):  # pragma: no cover - never called
+        raise AssertionError("not used")
+
+    def utcoffset(self, dt):
+        return timedelta(hours=1, minutes=12)
+
+    def dst(self, dt):
+        return timedelta(0)
+
+    def tzname(self, dt):
+        return "LMT"
+
+
+def test_pytz_style_timezone_is_read_through_zoneinfo():
+    job = Cron("0 0 12 * * *", timezone=_PytzLike())
+    assert fmt([job.next_run("2025-06-01T00:00:00Z")]) == ["2025-06-01 10:00:00"]
+    assert job.next_run("2025-06-01T00:00:00Z").utcoffset() == timedelta(hours=2)
+
+
+def test_pytz_timezone():
+    pytz = pytest.importorskip("pytz")
+    job = Cron("0 0 12 * * *", timezone=pytz.timezone("Europe/Stockholm"))
+    assert fmt(job.next_runs(2, "2025-03-29T00:00:00Z")) == [
+        "2025-03-29 11:00:00",
+        "2025-03-30 10:00:00",
+    ]
+    assert fmt([Cron("0 0 12 * * *", timezone=pytz.utc).next_run("2025-06-01T00:00:00Z")]) == [
+        "2025-06-01 12:00:00"
+    ]
 
 
 def test_empty_timezone_means_local():

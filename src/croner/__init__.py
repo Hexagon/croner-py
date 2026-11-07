@@ -12,6 +12,6 @@ from ._cron import Cron, CronIterator, scheduled_jobs
 from ._errors import CronError
 from ._pattern import CronPattern
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 __all__ = ["Cron", "CronError", "CronIterator", "CronPattern", "scheduled_jobs", "__version__"]

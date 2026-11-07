@@ -7,8 +7,8 @@ import calendar
 import inspect
 import threading
 import warnings
-from datetime import date, datetime, timedelta, tzinfo
-from typing import Any, Callable, Iterator, List, Optional, Union
+from datetime import date, datetime, time, timedelta, tzinfo
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 from ._errors import CronError
 from ._pattern import LAST_OCCURRENCE, MODES, OCCURRENCE_BITMASKS, CronPattern
@@ -578,16 +578,75 @@ class Cron:
         return found
 
     def _calculate_previous_run(self, start_at: datetime, now: datetime) -> Optional[datetime]:
+        """The last run, counted from ``start_at``, that has no successor at or before ``now``.
+
+        Each run is the first match at least ``interval`` after the one before, so the runs
+        are walked one by one. On ordinary days (see :meth:`_ordinary_days`), the runs of a
+        day only depend on the time of its first run, so the first run of the next day is
+        remembered by that time, and whole days are skipped once a time comes round again.
+        """
         if start_at > now:
             return None
         step = timedelta(seconds=self.interval)
+        skip_days = self.interval < 86400
+        zone = self._zone
+        next_first: Dict[time, time] = {}  # time of the first run of a day -> of the next day
+        first: Optional[datetime] = None  # wall clock time of the first run of the current day
+        at_first = False  # ``previous`` is ``first``
         previous = start_at
         while previous + step <= now:
+            if at_first and first is not None and skip_days:
+                while True:
+                    tod = next_first.get(first.time())
+                    if tod is None or not self._ordinary_days(first.date()):
+                        break
+                    wall = datetime.combine(first.date() + _ONE_DAY, tod)
+                    instant = zone.to_instant(wall)
+                    if instant > now:
+                        break
+                    previous, first = instant, wall
+                if previous + step > now:
+                    break
             nxt = self._walk(previous, previous, 1, True)
             if nxt is None:
                 break
+            wall = zone.wall(nxt)
+            if wall.date() != zone.wall(previous).date():
+                if (
+                    first is not None
+                    and skip_days
+                    and wall.date() == first.date() + _ONE_DAY
+                    and self._ordinary_days(first.date())
+                ):
+                    next_first[first.time()] = wall.time()
+                first = wall
+                at_first = True
+            else:
+                at_first = False
             previous = nxt
         return previous
+
+    def _ordinary_days(self, day: date) -> bool:
+        """``day`` and the day after both match the date fields of the pattern, and the
+        UTC offset stays the same through both."""
+        p = self.pattern
+        days = (day, day + _ONE_DAY)
+        for d in days:
+            if (
+                (not p.star_year and not p.year[d.year])
+                or not p.month[d.month - 1]
+                or not self._day_match(d.year, d.month, d.day)
+            ):
+                return False
+        zone = self._zone
+        if zone.is_fixed:
+            return True
+        midnight = datetime.combine(day, time())
+        offset = zone.utcoffset(zone.to_instant(midnight))
+        return all(
+            zone.utcoffset(zone.to_instant(midnight + timedelta(hours=h))) == offset
+            for h in range(3, 49, 3)
+        )
 
     # ---------------------------------------------------- DST aware search
 
