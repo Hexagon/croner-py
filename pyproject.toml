@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "croner"
 dynamic = ["version"]
-description = "Cron for Python. Parse and evaluate cron patterns, enumerate runs across time zones and DST, and schedule functions. A port of croner (JavaScript) and croner-rust, without dependencies."
+description = "Cron for Python. Parse and evaluate cron patterns, enumerate runs across time zones and DST, and schedule functions. No dependencies."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -51,3 +51,19 @@ include = ["src/croner", "tests", "README.md", "CHANGELOG.md", "LICENSE"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "SIM", "RUF"]
+ignore = ["SIM108"]  # if-else blocks are often clearer than conditional expressions
+
+[tool.ruff.lint.pyupgrade]
+# Keep typing.Optional / List on Python 3.9, where annotations may still be evaluated at runtime
+keep-runtime-typing = true
+
+[tool.mypy]
+files = ["src/croner"]
+strict = true

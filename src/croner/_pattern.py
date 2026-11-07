@@ -7,16 +7,17 @@ following the Open Cron Pattern Standard (OCPS) 1.0 - 1.4.
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Union
+from collections.abc import MutableSequence, Sequence
+from typing import Any, Optional, Union
 
 from ._errors import CronError
 
 __all__ = [
-    "CronPattern",
-    "LAST_OCCURRENCE",
     "ANY_OCCURRENCE",
-    "OCCURRENCE_BITMASKS",
+    "LAST_OCCURRENCE",
     "MODES",
+    "OCCURRENCE_BITMASKS",
+    "CronPattern",
 ]
 
 #: Bit for the last occurrence of a weekday in its month (``5#L`` / ``5L``).
@@ -96,7 +97,7 @@ _Nth = Union[int, str, None]
 
 def _int(value: str, what: str, conf: str) -> int:
     if not _DIGITS.match(value):
-        raise CronError(f"CronPattern: {what} is not a number: '{conf}'")
+        raise CronError(f"{what} is not a number: '{conf}'")
     return int(value)
 
 
@@ -128,10 +129,10 @@ class CronPattern:
         sloppy_ranges: bool = False,
     ) -> None:
         if not isinstance(pattern, str):
-            raise CronError("CronPattern: Pattern has to be of type string.")
+            raise CronError("pattern must be a str")
         if mode not in MODES:
             raise CronError(
-                "CronPattern: mode must be one of " + ", ".join(repr(m) for m in MODES) + "."
+                "mode must be one of " + ", ".join(repr(m) for m in MODES) + "."
             )
 
         self.pattern: str = pattern
@@ -139,14 +140,14 @@ class CronPattern:
         self.alternative_weekdays: bool = alternative_weekdays
         self.sloppy_ranges: bool = sloppy_ranges
 
-        self.second: List[int] = [0] * 60
-        self.minute: List[int] = [0] * 60
-        self.hour: List[int] = [0] * 24
-        self.day: List[int] = [0] * 31
-        self.month: List[int] = [0] * 12
-        self.day_of_week: List[int] = [0] * 7
+        self.second: list[int] = [0] * 60
+        self.minute: list[int] = [0] * 60
+        self.hour: list[int] = [0] * 24
+        self.day: list[int] = [0] * 31
+        self.month: list[int] = [0] * 12
+        self.day_of_week: list[int] = [0] * 7
         self.year: bytearray = bytearray(10000)
-        self.nearest_weekdays: List[int] = [0] * 31
+        self.nearest_weekdays: list[int] = [0] * 31
 
         self.last_day_of_month: bool = False
         self.last_weekday: bool = False
@@ -160,8 +161,10 @@ class CronPattern:
         self.is_fixed_time: bool = False
 
         # Step and wildcard information, used by describe()
-        self.steps = {"second": 1, "minute": 1, "hour": 1, "day": 1, "month": 1, "day_of_week": 1, "year": 1}
-        self.wildcards = {k: False for k in self.steps}
+        self.steps: dict[str, int] = dict.fromkeys(
+            ("second", "minute", "hour", "day", "month", "day_of_week", "year"), 1
+        )
+        self.wildcards: dict[str, bool] = {k: False for k in self.steps}
 
         self._parse()
 
@@ -177,7 +180,7 @@ class CronPattern:
 
         if count < 5 or count > 7:
             raise CronError(
-                f"CronPattern: invalid configuration format ('{source}'), exactly five, six, "
+                f"invalid configuration format ('{source}'), exactly five, six, "
                 "or seven space separated parts are required."
             )
 
@@ -186,7 +189,7 @@ class CronPattern:
             if count not in expected:
                 expected_str = " or ".join(str(e) for e in expected)
                 raise CronError(
-                    f"CronPattern: mode '{self.mode}' requires exactly {expected_str} parts, "
+                    f"mode '{self.mode}' requires exactly {expected_str} parts, "
                     f"but pattern '{source}' has {count} parts."
                 )
 
@@ -223,7 +226,7 @@ class CronPattern:
             self.use_and_logic = True
             parts[5] = parts[5][1:]
             if parts[5] == "":
-                raise CronError("CronPattern: Day-of-week field cannot be empty after '+' modifier.")
+                raise CronError("Day-of-week field cannot be empty after '+' modifier.")
 
         if parts[5] == "*":
             self.star_dow = True
@@ -248,7 +251,7 @@ class CronPattern:
         )
         self._part_to_array("year", parts[6], 0, 1)
 
-        def is_fixed(part: str, values: List[int]) -> bool:
+        def is_fixed(part: str, values: list[int]) -> bool:
             return "*" not in part and "/" not in part and sum(1 for v in values if v) == 1
 
         self.is_fixed_time = (
@@ -257,8 +260,9 @@ class CronPattern:
             and is_fixed(parts[2], self.hour)
         )
 
-    def _table(self, kind: str):
-        return getattr(self, kind)
+    def _table(self, kind: str) -> MutableSequence[int]:
+        table: MutableSequence[int] = getattr(self, kind)
+        return table
 
     def _size(self, kind: str) -> int:
         return len(self._table(kind))
@@ -266,7 +270,7 @@ class CronPattern:
     def _part_to_array(self, kind: str, conf: str, offset: int, default: int) -> None:
         if conf == "" and not (kind == "day" and (self.last_day_of_month or self.last_weekday)):
             raise CronError(
-                f"CronPattern: configuration entry {kind} ({conf}) is empty, check for trailing spaces."
+                f"configuration entry {kind} ({conf}) is empty, check for trailing spaces."
             )
 
         if conf == "*":
@@ -290,26 +294,26 @@ class CronPattern:
         elif conf != "":
             self._handle_number(conf, kind, offset, default)
 
-    def _throw_at_illegal_characters(self, parts: List[str]) -> None:
+    def _throw_at_illegal_characters(self, parts: list[str]) -> None:
         for i, part in enumerate(parts):
             regex = _ILLEGAL_DOM if i == 3 else _ILLEGAL_DOW if i == 5 else _ILLEGAL
             if regex.search(part):
                 raise CronError(
-                    f"CronPattern: configuration entry {i} ({part}) contains illegal characters."
+                    f"configuration entry {i} ({part}) contains illegal characters."
                 )
 
-    def _extract_nth(self, conf: str, kind: str):
+    def _extract_nth(self, conf: str, kind: str) -> tuple[str, _Nth]:
         rest = conf
         nth: _Nth = None
         if "#" in rest:
             if kind != "day_of_week":
-                raise CronError("CronPattern: nth (#) only allowed in day-of-week field")
+                raise CronError("nth (#) only allowed in day-of-week field")
             rest, _, nth_str = rest.partition("#")
             nth = nth_str
         elif rest.upper().endswith("L"):
             if kind != "day_of_week":
                 raise CronError(
-                    "CronPattern: L modifier only allowed in day-of-week field "
+                    "L modifier only allowed in day-of-week field "
                     "(use L alone for day-of-month)"
                 )
             nth = "L"
@@ -321,21 +325,21 @@ class CronPattern:
         if "W" in conf.upper():
             if kind != "day":
                 raise CronError(
-                    "CronPattern: Nearest weekday modifier (W) only allowed in day-of-month."
+                    "Nearest weekday modifier (W) only allowed in day-of-month."
                 )
             if not rest.upper().endswith("W"):
-                raise CronError(f"CronPattern: Invalid nearest weekday value: '{conf}'")
+                raise CronError(f"Invalid nearest weekday value: '{conf}'")
             kind = "nearest_weekdays"
             rest = rest[:-1]
         index = _int(rest, kind, conf) + offset
         self._set_part(kind, index, nth if nth is not None else default)
 
-    def _set_part(self, kind: str, index: int, value) -> None:
+    def _set_part(self, kind: str, index: int, value: _Nth) -> None:
         if kind == "day_of_week":
             if index == 7:
                 index = 0
             if index < 0 or index > 6:
-                raise CronError(f"CronPattern: Invalid value for dayOfWeek: {index}")
+                raise CronError(f"invalid value for day_of_week: {index}")
             self._set_nth_weekday_of_month(index, value)
             return
 
@@ -350,34 +354,36 @@ class CronPattern:
         elif kind == "year":
             if not 1 <= index < 10000:
                 raise CronError(
-                    f"CronPattern: Invalid value for year: {index} (supported range: 1-9999)"
+                    f"Invalid value for year: {index} (supported range: 1-9999)"
                 )
             valid = True
         else:  # pragma: no cover - internal
-            raise CronError(f"CronPattern: Invalid part specified: {kind}")
+            raise CronError(f"Invalid part specified: {kind}")
         if not valid:
-            raise CronError(f"CronPattern: Invalid value for {kind}: {index}")
+            raise CronError(f"Invalid value for {kind}: {index}")
+        if not isinstance(value, int):  # pragma: no cover - only day_of_week takes # and L
+            raise CronError(f"Invalid value for {kind}: {value}")
         self._table(kind)[index] = value
 
     def _validate_range(self, lower: int, upper: int, steps: Optional[int], kind: str, conf: str) -> None:
         if lower > upper:
-            raise CronError(f"CronPattern: From value is larger than to value: '{conf}'")
+            raise CronError(f"From value is larger than to value: '{conf}'")
         if steps is not None:
             if steps == 0:
-                raise CronError("CronPattern: Syntax error, illegal stepping: 0")
+                raise CronError("Syntax error, illegal stepping: 0")
             if steps > self._size(kind):
                 raise CronError(
-                    "CronPattern: Syntax error, steps cannot be greater than maximum value of part "
+                    "Syntax error, steps cannot be greater than maximum value of part "
                     f"({self._size(kind)})"
                 )
 
     def _handle_range_with_stepping(self, conf: str, kind: str, offset: int, default: int) -> None:
         if "W" in conf.upper():
-            raise CronError("CronPattern: Syntax error, W is not allowed in ranges with stepping.")
+            raise CronError("Syntax error, W is not allowed in ranges with stepping.")
         rest, nth = self._extract_nth(conf, kind)
         m = _RANGE_STEP.match(rest)
         if m is None:
-            raise CronError(f"CronPattern: Syntax error, illegal range with stepping: '{conf}'")
+            raise CronError(f"Syntax error, illegal range with stepping: '{conf}'")
         lower = int(m.group(1)) + offset
         upper = int(m.group(2)) + offset
         steps = int(m.group(3))
@@ -388,11 +394,11 @@ class CronPattern:
 
     def _handle_range(self, conf: str, kind: str, offset: int, default: int) -> None:
         if "W" in conf.upper():
-            raise CronError("CronPattern: Syntax error, W is not allowed in a range.")
+            raise CronError("Syntax error, W is not allowed in a range.")
         rest, nth = self._extract_nth(conf, kind)
         split = rest.split("-")
         if len(split) != 2:
-            raise CronError(f"CronPattern: Syntax error, illegal range: '{conf}'")
+            raise CronError(f"Syntax error, illegal range: '{conf}'")
         lower = _int(split[0], "lower range", conf) + offset
         upper = _int(split[1], "upper range", conf) + offset
         self._validate_range(lower, upper, None, kind, conf)
@@ -401,21 +407,21 @@ class CronPattern:
 
     def _handle_stepping(self, conf: str, kind: str, offset: int, default: int) -> None:
         if "W" in conf.upper():
-            raise CronError("CronPattern: Syntax error, W is not allowed in parts with stepping.")
+            raise CronError("Syntax error, W is not allowed in parts with stepping.")
         rest, nth = self._extract_nth(conf, kind)
         split = rest.split("/")
         if len(split) != 2:
-            raise CronError(f"CronPattern: Syntax error, illegal stepping: '{conf}'")
+            raise CronError(f"Syntax error, illegal stepping: '{conf}'")
 
         if not self.sloppy_ranges:
             if split[0] == "":
                 raise CronError(
-                    f"CronPattern: Syntax error, stepping with missing prefix ('{conf}') is not "
+                    f"Syntax error, stepping with missing prefix ('{conf}') is not "
                     "allowed. Use wildcard (*/step) or range (min-max/step) instead."
                 )
             if split[0] != "*":
                 raise CronError(
-                    f"CronPattern: Syntax error, stepping with numeric prefix ('{conf}') is not "
+                    f"Syntax error, stepping with numeric prefix ('{conf}') is not "
                     "allowed. Use wildcard (*/step) or range (min-max/step) instead."
                 )
         elif split[0] == "":
@@ -437,7 +443,7 @@ class CronPattern:
             self._set_part(kind, i, nth if nth is not None else default)
 
     @staticmethod
-    def _replace_alpha(conf: str, mapping) -> str:
+    def _replace_alpha(conf: str, mapping: Sequence[tuple[str, str]]) -> str:
         for name, value in mapping:
             conf = re.sub(re.escape(name), value, conf, flags=re.IGNORECASE)
         return conf
@@ -448,12 +454,11 @@ class CronPattern:
             return "0 0 * * 1"  # Sunday is 1 with Quartz-style weekdays
         if clean == "@reboot":
             raise CronError(
-                "CronPattern: @reboot is not supported in this environment. "
-                "This is an event-based trigger that requires system startup detection."
+                "@reboot is not supported, it needs system startup detection"
             )
         return _NICKNAMES.get(clean, pattern)
 
-    def _set_nth_weekday_of_month(self, index: int, nth) -> None:
+    def _set_nth_weekday_of_month(self, index: int, nth: _Nth) -> None:
         dow = self.day_of_week
         if isinstance(nth, str):
             if nth.upper() == "L":
@@ -463,20 +468,20 @@ class CronPattern:
                 nth = int(nth)
             else:
                 raise CronError(
-                    f"CronPattern: nth weekday out of range, should be 1-5 or L. Value: {nth}"
+                    f"nth weekday out of range, should be 1-5 or L. Value: {nth}"
                 )
         if nth == ANY_OCCURRENCE:
             dow[index] = ANY_OCCURRENCE
-        elif 0 < nth < 6:
+        elif nth is not None and 0 < nth < 6:
             dow[index] |= OCCURRENCE_BITMASKS[nth - 1]
         else:
             raise CronError(
-                f"CronPattern: nth weekday out of range, should be 1-5 or L. Value: {nth}"
+                f"nth weekday out of range, should be 1-5 or L. Value: {nth}"
             )
 
     # ----------------------------------------------------------------- helpers
 
-    def values(self, kind: str) -> List[int]:
+    def values(self, kind: str) -> list[int]:
         """Return the plain values set in a field, in the units used in patterns.
 
         ``kind`` is one of ``second``, ``minute``, ``hour``, ``day``, ``month``,
@@ -488,6 +493,37 @@ class CronPattern:
         if kind == "day_of_week":
             return [i for i, v in enumerate(table) if v == ANY_OCCURRENCE]
         return [i + base for i, v in enumerate(table) if v]
+
+    def _key(self) -> tuple[Any, ...]:
+        return (
+            tuple(self.second),
+            tuple(self.minute),
+            tuple(self.hour),
+            tuple(self.day),
+            tuple(self.month),
+            tuple(self.day_of_week),
+            bytes(self.year),
+            tuple(self.nearest_weekdays),
+            self.last_day_of_month,
+            self.last_weekday,
+            self.star_dom,
+            self.star_dow,
+            self.star_year,
+            self.use_and_logic,
+            self.is_fixed_time,
+        )
+
+    def __eq__(self, other: object) -> bool:
+        """Patterns are equal when they match the same times, with the same DST handling.
+
+        ``CronPattern("@daily") == CronPattern("0 0 * * *")`` is true.
+        """
+        if not isinstance(other, CronPattern):
+            return NotImplemented
+        return self._key() == other._key()
+
+    def __hash__(self) -> int:
+        return hash(self._key())
 
     def __str__(self) -> str:
         return self.pattern

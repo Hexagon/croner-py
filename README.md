@@ -2,43 +2,48 @@
 
 Croner is available for [JavaScript/TypeScript](https://github.com/Hexagon/croner) · [Rust](https://github.com/Hexagon/croner-rust) · **Python** · [.NET](https://github.com/Hexagon/croner-dotnet) · [C++](https://github.com/Hexagon/croner-cpp)
 
-Trigger functions or evaluate cron expressions in Python. No dependencies. Most features. Python 3.9+.
+Parse and evaluate cron patterns, enumerate runs across time zones and DST, and schedule functions.
+No dependencies beyond the standard library. Python 3.9+.
 
-This is the Python flavor of [croner](https://github.com/hexagon/croner) (JavaScript/TypeScript) and
-[croner-rust](https://github.com/hexagon/croner-rust). All three parse the same patterns and schedule the
-same runs, DST included.
-
-*   Schedule functions, or just evaluate patterns: next runs, previous runs, matching.
-*   Works in any time zone, or a fixed UTC offset, with well defined DST behavior.
-*   Follows the [Open Cron Pattern Standard](https://github.com/open-source-cron/ocps) (OCPS) 1.0 - 1.4,
-    with optional seconds and years, `L`, `W`, `#`, `+` and `?`, with a few
-    [deviations](#ocps-conformance) shared with croner (JS).
+*   **Evaluate patterns** without scheduling anything: next and previous runs, matching, iteration.
+*   **Schedule functions** in threads, or as a decorator. Plain and `async def` functions both work.
+*   **Time zone aware.** Returns aware `datetime` objects in any `zoneinfo` time zone, a fixed UTC offset,
+    or system local time, with well defined behavior when the clock changes for DST.
+*   **Extended syntax** from the [Open Cron Pattern Standard](https://github.com/open-source-cron/ocps)
+    (OCPS) 1.0 - 1.4: optional seconds and years, `L`, `W`, `#`, `+` and `?`.
 *   Over-run protection, error handling, pausing, max runs, intervals, start and stop dates, day offsets.
 *   Human readable descriptions of patterns.
-*   No dependencies, only the Python standard library. Fully typed.
+*   Fully typed (`py.typed`).
 
 Quick examples:
 
 ```python
+from itertools import islice
+
 from croner import Cron
 
-# Basic: run a function at the fifth second of every minute
+# Run a function at the fifth second of every minute
 job = Cron("5 * * * * *", lambda: print("This will run every fifth second"))
 
-# Enumeration: what dates do the next 100 sundays occur on?
-next_sundays = Cron("0 0 0 * * 7").next_runs(100)
-
-# Days left to a specific date
-ms_left = Cron("59 59 23 24 DEC *").ms_to_next()
-print(f"{ms_left // 86_400_000} days left to next christmas eve")
-
-# Run a function once, at a specific date and time
-job = Cron("2027-01-23T00:00:00", lambda: print("Yay!"), timezone="Asia/Kolkata")
-
-# As a decorator, with over-run protection
+# As a decorator, with over-run protection. The decorated name is the job.
 @Cron("*/5 * * * * *", protect=True)
 def every_five_seconds(job):
     print("Every five seconds, never overlapping. Next run:", job.next_run())
+
+every_five_seconds.pause()
+
+# Run once, at a specific date and time
+job = Cron("2027-01-23T00:00:00", lambda: print("Yay!"), timezone="Asia/Kolkata")
+
+# The next 100 Sundays
+next_sundays = Cron("0 0 * * SUN").next_runs(100)
+
+# A job is an iterator over its upcoming runs
+for run in islice(Cron("0 9 * * MON-FRI", timezone="Europe/Stockholm"), 5):
+    print(run.isoformat())
+
+# Days left to Christmas Eve (a timedelta)
+days_left = Cron("0 0 24 12 *").time_to_next().days
 
 # Describe a pattern
 print(Cron("0 12 * * MON-FRI").describe())  # At 12:00, on Monday, Tuesday, Wednesday, Thursday, and Friday.
@@ -69,12 +74,27 @@ job = Cron("* * * * * *", max_runs=1)
 job.schedule(lambda job, context: None)
 ```
 
-The function is called with the job and `options.context`, `fn(job, context)`. A function that takes fewer
-arguments gets fewer: `fn(job)` or `fn()`. Coroutine functions (`async def`) are run to completion.
+The function is called as `fn(job, context)`, where `context` is the `context` option. A function that
+takes fewer arguments gets fewer: `fn(job)` or `fn()`. Coroutine functions (`async def`) are run to
+completion with `asyncio.run()` in the worker thread.
 
 Each run happens in a thread of its own, so a slow run does not delay the schedule (use `protect` to
-prevent overlapping runs). The scheduler keeps the process alive while a job is scheduled, like a
-JavaScript timer, unless you pass `unref=True`.
+prevent overlapping runs). Scheduler threads are not daemon threads, so the interpreter keeps running
+while a job is scheduled. Pass `daemon=True` to use daemon threads, letting the process exit while jobs
+are still scheduled.
+
+As a decorator, a job schedules the decorated function and takes its place. The decorated name then
+refers to the job, which can be paused, stopped and queried, and calling it calls the function:
+
+```python
+@Cron("0 * * * *", daemon=True)
+def hourly_report():
+    ...
+
+hourly_report.next_run()  # the job
+hourly_report()           # runs the function now, in the calling thread
+hourly_report.stop()
+```
 
 #### Status
 
@@ -82,8 +102,9 @@ JavaScript timer, unless you pass `unref=True`.
 job.next_run(start=None)              # The next run (datetime), or None.
 job.next_runs(10, start=None)         # The next 10 runs.
 job.previous_runs(10, reference=None) # The 10 previous scheduled runs, most recent first.
-job.enumerate(start=None)             # A stateful iterator, for loops: for run in job.enumerate(): ...
-job.ms_to_next(start=None)            # Milliseconds to the next run, or None.
+job.enumerate(start=None)             # An iterator over the runs after start, with peek() and reset().
+job.time_to_next(start=None)          # Time to the next run (timedelta), or None.
+job.ms_to_next(start=None)            # The same in milliseconds (int).
 job.current_run()                     # When the current (or last) run started.
 job.previous_run()                    # When the previous run started.
 job.runs_left()                       # Runs left, None for unlimited.
@@ -95,9 +116,12 @@ job.is_stopped()                      # Stopped with stop().
 job.is_busy()                         # The function is running right now.
 
 job.get_pattern()                     # The original pattern, or None for one-off jobs.
-job.get_once()                        # The date of a one-off job, or None.
+job.once                              # The date of a one-off job, or None. Also job.get_once().
 job.describe()                        # Human readable description of the pattern.
 ```
+
+`iter(job)` is the same as `job.enumerate()`, so a job can be used directly in a `for` loop or with
+`itertools`. Without `stop_at` or `max_runs` the iterator is endless.
 
 #### Control functions
 
@@ -132,15 +156,16 @@ and compare correctly as instants.
 | max_runs             | None    | int                 | Maximum number of runs, None for unlimited. |
 | catch                | False   | bool \| callable    | Catch errors raised by the function. `True` silently ignores them, a callable is called as `catch(error, job)`. |
 | timezone             | None    | str \| tzinfo       | Time zone in Europe/Stockholm format, or a `tzinfo` (`zoneinfo`, `dateutil`, or `pytz`, which is read through `zoneinfo`). |
-| utc_offset           | None    | int                 | Schedule with a fixed UTC offset in minutes. This does not take DST into account, you probably want `timezone`. |
+| utc_offset           | None    | int \| timedelta    | Schedule with a fixed UTC offset, in minutes or as a `timedelta`. This does not take DST into account, you probably want `timezone`. |
 | start_at             | None    | datetime \| str     | Earliest run. Inclusive, a run exactly at `start_at` is included (except when `interval` is set). |
 | stop_at              | None    | datetime \| str     | Stop before this date. Exclusive, a run exactly at `stop_at` is not included. |
-| interval             | 0       | int                 | Minimum number of seconds between runs. |
+| interval             | 0       | int \| timedelta    | Minimum time between runs, in seconds or as a `timedelta`. |
 | paused               | False   | bool                | Start paused. |
 | context              | None    | Any                 | Passed as the second argument to the function. |
 | dom_and_dow          | False   | bool                | Combine day-of-month and day-of-week with AND (True) or OR (False). |
 | legacy_mode          | -       | bool                | **Deprecated:** use `dom_and_dow`. Inverse of `dom_and_dow`. |
-| unref                | False   | bool                | Run the scheduler in daemon threads, so the process can exit while the job is scheduled. |
+| daemon               | False   | bool                | Run the scheduler and the function in daemon threads, so the process can exit while the job is scheduled. |
+| unref                | False   | bool                | Alias of `daemon`. |
 | protect              | False   | bool \| callable    | Over-run protection: skip runs while a previous run is still going. A callable is called as `protect(job)` for each skipped run. |
 | alternative_weekdays | False   | bool                | Quartz-style weekday numbering (1 = Sunday, 2 = Monday, ..., 7 = Saturday). |
 | allow_past           | False   | bool                | Let a one-off job dated in the past run immediately. Otherwise only one dated within the last second does. |
@@ -152,7 +177,7 @@ Invalid patterns and options raise `croner.CronError`, a subclass of `ValueError
 
 #### Pattern
 
-Croner uses [Vixie cron](https://en.wikipedia.org/wiki/Cron#CRON_expression) based expressions, with these extensions:
+Patterns are based on [Vixie cron](https://en.wikipedia.org/wiki/Cron#CRON_expression), with these extensions:
 
 ```
 ┌──────────────── (optional) second (0 - 59)
@@ -175,7 +200,7 @@ Croner uses [Vixie cron](https://en.wikipedia.org/wiki/Cron#CRON_expression) bas
 *   **+**: Prefix the day-of-week field to combine it with day-of-month using AND:
     `0 12 1 * +MON` only runs when the 1st is a Monday.
 *   **?**: An alias for `*`. Non-portable, avoid it in patterns meant for other systems.
-*   **DST**, the same as croner (JS), croner-rust and Vixie cron, deviating from OCPS 1.4 §4.3.1:
+*   **DST** follows Vixie cron, deviating from OCPS 1.4 §4.3.1:
     *   **Fixed-time jobs**, with a single value in each of second, minute and hour (e.g. `0 30 2 * * *`):
         a time that occurs twice (fall back) runs once, at the first occurrence. A time that doesn't
         exist (spring forward) runs at the first valid time after the gap, on the same day.
@@ -209,12 +234,12 @@ Weekday and month names are case-insensitive.
 | @weekly                | `0 0 * * 0`   (Sundays, also with `alternative_weekdays`) |
 | @daily / @midnight     | `0 0 * * *`   |
 | @hourly                | `0 * * * *`   |
-| @reboot                | Recognized, but raises `CronError`, as croner can't detect system startup. |
+| @reboot                | Recognized, but raises `CronError`, since a library can't detect system startup. |
 
 #### OCPS conformance
 
 Croner passes the [OCPS conformance tests](https://github.com/open-source-cron/ocps/blob/main/data/conformance-tests.json),
-except where it keeps the behavior of croner (JS):
+with these deliberate deviations:
 
 *   **DST**: follows Vixie cron instead of OCPS 1.4 §4.3.1, as described above.
 *   **`?`** is accepted in every field, as an alias for `*`. OCPS 1.4 only allows it in day-of-month
@@ -240,15 +265,34 @@ pattern.values("day_of_week")  # [1, 2, 3, 4, 5]
 pattern.is_fixed_time          # False
 ```
 
+### Command line
+
+`python -m croner` describes a pattern and lists its next runs, handy for checking a pattern before
+putting it in a config file:
+
+```console
+$ python -m croner "0 9 * * MON-FRI" --timezone Europe/Stockholm -n 3
+At 09:00, on Monday, Tuesday, Wednesday, Thursday, and Friday.
+2026-11-09T09:00:00+01:00
+2026-11-10T09:00:00+01:00
+2026-11-11T09:00:00+01:00
+```
+
+Use `--start` to list runs after another date, and `--previous` for previous runs.
+
 ## Development
 
 ```bash
-pip install -e . pytest
+pip install -e . pytest mypy ruff
 python -m pytest
+TZ=America/New_York python -m pytest  # jobs without a time zone use system local time
+ruff check .
+mypy
 ```
 
-`tools/compare_with_js.py` compares random patterns with croner (JavaScript), run from source with
-Node.js, see the script for details.
+`tools/compare_with_js.py` is a differential test: it runs random patterns, options and dates around DST
+changes through croner-py and the JavaScript implementation and compares the results. It needs Node.js
+22.6 or newer, see the script for details.
 
 ## License
 
