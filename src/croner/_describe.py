@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Optional
 
 from ._pattern import ANY_OCCURRENCE, LAST_OCCURRENCE, OCCURRENCE_BITMASKS, CronPattern
 
@@ -31,7 +31,7 @@ def describe(pattern: CronPattern, dom_and_dow: bool = False) -> str:
     return text[0].upper() + text[1:] + "."
 
 
-def _values(p: CronPattern, kind: str) -> List[int]:
+def _values(p: CronPattern, kind: str) -> list[int]:
     return p.values(kind)
 
 
@@ -43,12 +43,12 @@ def _is_all_set(p: CronPattern, kind: str) -> bool:
     return len(_values(p, kind)) == _FIELD_SIZE[kind]
 
 
-def _stepped_from_start(p: CronPattern, kind: str, values: List[int]) -> bool:
+def _stepped_from_start(p: CronPattern, kind: str, values: list[int]) -> bool:
     minimum = 1 if kind == "month" else 0
     return p.steps[kind] > 1 and bool(values) and values[0] == minimum
 
 
-def _text_list(items: List[str]) -> str:
+def _text_list(items: list[str]) -> str:
     if not items:
         return ""
     if len(items) == 1:
@@ -58,9 +58,9 @@ def _text_list(items: List[str]) -> str:
     return ", ".join(items[:-1]) + ", and " + items[-1]
 
 
-def _number_list(values: List[int]) -> str:
+def _number_list(values: list[int]) -> str:
     values = sorted(values)
-    items: List[str] = []
+    items: list[str] = []
     i = 0
     while i < len(values):
         j = i
@@ -74,7 +74,7 @@ def _number_list(values: List[int]) -> str:
     return _text_list(items)
 
 
-def _time_of_day(hour: int, minute: int, second=None) -> str:
+def _time_of_day(hour: int, minute: int, second: Optional[int] = None) -> str:
     if second is None:
         return f"{hour:02}:{minute:02}"
     return f"{hour:02}:{minute:02}:{second:02}"
@@ -123,7 +123,7 @@ def _describe_time(p: CronPattern) -> str:
     if every_second and all_minutes and not all_hours:
         return f"Every second past {hour_desc()}"
 
-    parts: List[str] = []
+    parts: list[str] = []
     if every_second:
         parts.append("Every second")
     elif not default_seconds:
@@ -152,7 +152,7 @@ def _describe_time(p: CronPattern) -> str:
 
 
 def _describe_dom(p: CronPattern) -> str:
-    parts: List[str] = []
+    parts: list[str] = []
     days = _values(p, "day")
     if days:
         parts.append(f"day {_number_list(days)}")
@@ -166,8 +166,8 @@ def _describe_dom(p: CronPattern) -> str:
     return _text_list(parts)
 
 
-def _describe_dow_parts(p: CronPattern) -> List[str]:
-    parts: List[str] = []
+def _describe_dow_parts(p: CronPattern) -> list[str]:
+    parts: list[str] = []
     dow = p.day_of_week
     last = [_DAY_NAMES[i] for i, v in enumerate(dow) if v != ANY_OCCURRENCE and v & LAST_OCCURRENCE]
     if last:

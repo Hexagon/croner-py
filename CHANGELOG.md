@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.0
+
+More Pythonic APIs. Everything from 1.0 keeps working.
+
+- The decorator returns the job instead of the function, so `@Cron(...)` gives a name to pause, stop
+  and query the job by. Calling the job calls the function, and it carries the function's `__name__`,
+  `__doc__` and `__wrapped__`.
+- `time_to_next()` returns the time to the next run as a `timedelta`. `ms_to_next()` remains.
+- `once` property, the same as `get_once()`.
+- `daemon` option, an alias of `unref`, and a `daemon` attribute.
+- `interval` and `utc_offset` accept a `timedelta`. Values that are not whole seconds (or minutes)
+  raise `CronError` instead of being truncated.
+- `datetime.timezone` fixed offsets passed as `timezone` skip the DST checks.
+- `CronPattern` objects compare equal when they match the same times: `CronPattern("@daily") ==
+  CronPattern("0 0 * * *")`. They are hashable.
+- `python -m croner PATTERN` describes a pattern and lists its next or previous runs.
+- Error messages name the Python options (`utc_offset`, `day_offset`, `day_of_week`), without the
+  `CronOptions:` / `CronPattern:` / `CronDate:` prefixes.
+- Passes `mypy --strict`. Linting with ruff and type checking with mypy run in CI.
+
 ## 1.0.1
 
 - Fixed `pytz` time zones passed as `timezone`. They were used without `localize()`, which gives

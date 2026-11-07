@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 from ._errors import CronError
 
@@ -25,14 +25,14 @@ _ONE_SECOND = timedelta(seconds=1)
 class Zone:
     """Converts between instants and wall clock times in one time zone."""
 
-    def __init__(self, tz: Union[None, str, int, tzinfo] = None) -> None:
+    def __init__(self, tz: Union[str, int, tzinfo, None] = None) -> None:
         self.offset: Optional[int] = None
         self.tzinfo: Optional[tzinfo] = None
-        self.name: Union[None, str, int] = None
+        self.name: Union[str, int, None] = None
         if tz is None:
             return
         if isinstance(tz, bool):
-            raise CronError("Zone: invalid timezone")
+            raise CronError("timezone must be a str or a tzinfo, not a bool")
         if isinstance(tz, int):
             self.offset = tz
             self.name = tz
@@ -43,7 +43,7 @@ class Zone:
             try:
                 self.tzinfo = ZoneInfo(tz)
             except (ZoneInfoNotFoundError, ValueError) as e:
-                raise CronError(f"CronDate: Failed to use timezone '{tz}': {e}") from None
+                raise CronError(f"unknown time zone {tz!r}: {e}") from None
             self.name = tz
         elif isinstance(tz, tzinfo):
             zone = getattr(tz, "zone", None)
@@ -55,16 +55,16 @@ class Zone:
                 try:
                     tz = ZoneInfo(zone)
                 except (ZoneInfoNotFoundError, ValueError) as e:
-                    raise CronError(f"CronDate: Failed to use timezone '{zone}': {e}") from None
+                    raise CronError(f"unknown time zone {zone!r}: {e}") from None
             self.tzinfo = tz
             self.name = getattr(tz, "key", None) or str(tz)
         else:
-            raise CronError(f"Zone: invalid timezone {tz!r}")
+            raise CronError(f"timezone must be a str or a tzinfo, got {tz!r}")
 
     @property
     def is_fixed(self) -> bool:
         """True if the zone has no DST (a fixed UTC offset)."""
-        return self.offset is not None or self.tzinfo is UTC
+        return self.offset is not None or isinstance(self.tzinfo, timezone)
 
     # ----------------------------------------------------------- conversions
 
@@ -85,7 +85,7 @@ class Zone:
             return wall.replace(fold=fold).astimezone(UTC)
         return wall.replace(tzinfo=self.tzinfo, fold=fold).astimezone(UTC)
 
-    def resolve(self, wall: datetime) -> List[datetime]:
+    def resolve(self, wall: datetime) -> list[datetime]:
         """The instants a wall clock time refers to.
 
         One instant normally, two (earlier first) when the clock goes back and the
@@ -154,4 +154,4 @@ def parse_iso(value: str) -> datetime:
     try:
         return datetime.combine(date.fromisoformat(text), datetime.min.time())
     except ValueError:
-        raise CronError(f"CronDate: Invalid ISO 8601 date string '{value}'") from None
+        raise CronError(f"invalid ISO 8601 date string {value!r}") from None

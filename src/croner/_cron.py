@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import contextlib
 import inspect
 import threading
 import warnings
+from collections.abc import Iterator, Sequence
 from datetime import date, datetime, time, timedelta, tzinfo
-from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from ._errors import CronError
 from ._pattern import LAST_OCCURRENCE, MODES, OCCURRENCE_BITMASKS, CronPattern
@@ -25,7 +27,7 @@ _MAX_DELAY = 30.0  # never sleep longer than this, to survive suspend and clock 
 _SEARCH_YEARS = 400  # without a year field, the calendar repeats every 400 years
 
 #: All named jobs. A job is added when created with a ``name``, and removed by ``stop()``.
-scheduled_jobs: List["Cron"] = []
+scheduled_jobs: list[Cron] = []
 _registry_lock = threading.Lock()
 
 
@@ -57,15 +59,18 @@ class Cron:
     :param paused: Start paused.
     :param kill: Start stopped.
     :param catch: ``True`` to ignore errors from ``fn``, or a callable ``catch(error, job)``.
-    :param unref: Run the scheduler in a daemon thread, so it does not keep the process alive.
+    :param daemon: Run the scheduler and the function in daemon threads, so they do
+        not keep the process alive.
+    :param unref: Alias of ``daemon``.
     :param max_runs: Maximum number of runs.
-    :param interval: Minimum number of seconds between runs.
+    :param interval: Minimum time between runs, in seconds or as a ``timedelta``.
     :param protect: Skip a run while the previous one is still running.
         ``True``, or a callable ``protect(job)`` called for each skipped run.
     :param start_at: Earliest run (inclusive). Naive datetimes and strings are read in the job's time zone.
     :param stop_at: Stop before this time (exclusive).
     :param timezone: IANA time zone name (``"Europe/Stockholm"``) or a ``tzinfo``.
-    :param utc_offset: Fixed UTC offset in minutes. Cannot be combined with ``timezone``.
+    :param utc_offset: Fixed UTC offset, in minutes or as a ``timedelta``. Cannot be
+        combined with ``timezone``.
     :param dom_and_dow: Combine day-of-month and day-of-week with AND instead of OR.
     :param legacy_mode: Deprecated inverse of ``dom_and_dow``.
     :param day_offset: Shift every run by a number of days.
@@ -89,15 +94,16 @@ class Cron:
         name: Optional[str] = None,
         paused: bool = False,
         kill: bool = False,
-        catch: Union[bool, Callable[[BaseException, "Cron"], Any]] = False,
-        unref: bool = False,
+        catch: Union[bool, Callable[[BaseException, Cron], Any]] = False,
+        unref: Optional[bool] = None,
+        daemon: Optional[bool] = None,
         max_runs: Optional[int] = None,
-        interval: int = 0,
-        protect: Union[bool, Callable[["Cron"], Any]] = False,
+        interval: Union[int, timedelta] = 0,
+        protect: Union[bool, Callable[[Cron], Any]] = False,
         start_at: Optional[DateLike] = None,
         stop_at: Optional[DateLike] = None,
-        timezone: Union[None, str, tzinfo] = None,
-        utc_offset: Optional[int] = None,
+        timezone: Union[str, tzinfo, None] = None,
+        utc_offset: Union[int, timedelta, None] = None,
         dom_and_dow: Optional[bool] = None,
         legacy_mode: Optional[bool] = None,
         day_offset: int = 0,
@@ -108,12 +114,12 @@ class Cron:
         allow_past: bool = False,
     ) -> None:
         if fn is not None and not callable(fn):
-            raise CronError("Cron: Invalid argument passed for fn. Should be a callable.")
+            raise CronError("fn must be callable")
 
         # ---- options
         if legacy_mode is not None:
             warnings.warn(
-                "Cron: legacy_mode is deprecated, use dom_and_dow instead",
+                "legacy_mode is deprecated, use dom_and_dow instead",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -123,40 +129,35 @@ class Cron:
 
         if mode not in MODES:
             raise CronError(
-                "CronOptions: mode must be one of 'auto', '5-part', '6-part', '7-part', "
-                "'5-or-6-parts', or '6-or-7-parts'."
+                "mode must be one of " + ", ".join(repr(m) for m in MODES)
             )
-        try:
-            interval = int(interval)
-        except (TypeError, ValueError):
-            raise CronError("CronOptions: Supplied value for interval is not a number") from None
+        interval = _whole(interval, 1, "interval must be a whole number of seconds or a timedelta")
         if interval < 0:
-            raise CronError("CronOptions: Supplied value for interval can not be negative")
+            raise CronError("interval can not be negative")
         try:
             day_offset = int(day_offset)
         except (TypeError, ValueError):
             raise CronError(
-                "CronOptions: Invalid value passed for dayOffset, should be a number representing days to offset."
+                "day_offset must be a whole number of days"
             ) from None
         if timezone == "":
             timezone = None
         if utc_offset is not None:
-            try:
-                utc_offset = int(utc_offset)
-            except (TypeError, ValueError):
-                raise CronError(
-                    "CronOptions: Invalid value passed for utcOffset, should be number representing minutes offset from UTC."
-                ) from None
+            utc_offset = _whole(utc_offset, 60, "utc_offset must be a whole number of minutes or a timedelta")
             if not -870 <= utc_offset <= 870:
-                raise CronError("CronOptions: utcOffset out of bounds.")
+                raise CronError("utc_offset must be within -870 and 870 minutes (14.5 hours)")
             if timezone is not None:
-                raise CronError("CronOptions: Combining 'utcOffset' with 'timezone' is not allowed.")
+                raise CronError("utc_offset and timezone can not be combined")
         if max_runs is not None and max_runs != float("inf"):
             max_runs = int(max_runs)
         elif max_runs == float("inf"):
             max_runs = None
-        if not isinstance(unref, bool):
-            raise CronError("CronOptions: Unref should be either True or False.")
+        for flag, value in (("daemon", daemon), ("unref", unref)):
+            if value is not None and not isinstance(value, bool):
+                raise CronError(f"{flag} must be True or False")
+        if daemon is not None and unref is not None and daemon != unref:
+            raise CronError("daemon and unref are aliases, and can not have different values")
+        daemon = bool(daemon if daemon is not None else unref)
 
         self.name: Optional[str] = name
         self.interval: int = interval
@@ -165,7 +166,7 @@ class Cron:
         self.context: Any = context
         self.catch = catch
         self.protect = protect
-        self.unref: bool = unref
+        self.daemon: bool = daemon
         self.allow_past: bool = allow_past
         self.alternative_weekdays: bool = alternative_weekdays
         self.sloppy_ranges: bool = sloppy_ranges
@@ -215,7 +216,7 @@ class Cron:
             with _registry_lock:
                 if any(j.name == self.name for j in scheduled_jobs):
                     raise CronError(
-                        f"Cron: Tried to initialize new named job '{self.name}', but name already taken."
+                        f"a job named {self.name!r} already exists"
                     )
                 scheduled_jobs.append(self)
 
@@ -229,32 +230,40 @@ class Cron:
         """The next run after ``start`` (default: now), or ``None``."""
         return self._output(self._next_target(start, _now()))
 
-    def next_runs(self, n: int, start: Optional[DateLike] = None) -> List[datetime]:
+    def next_runs(self, n: int, start: Optional[DateLike] = None) -> list[datetime]:
         """The next ``n`` runs after ``start`` (default: the current run, or now)."""
         if self._max_runs is not None and n > self._max_runs:
             n = self._max_runs
         reference = start if start is not None else self._current_run
         return [self._zone.aware(d) for d in self._enumerate(n, reference, 1)]
 
-    def previous_runs(self, n: int, reference: Optional[DateLike] = None) -> List[datetime]:
+    def previous_runs(self, n: int, reference: Optional[DateLike] = None) -> list[datetime]:
         """The ``n`` scheduled runs before ``reference`` (default: now), most recent first."""
         return [self._zone.aware(d) for d in self._enumerate(n, reference, -1)]
 
-    def enumerate(self, start: Optional[DateLike] = None) -> "CronIterator":
+    def enumerate(self, start: Optional[DateLike] = None) -> CronIterator:
         """A stateful iterator over runs strictly after ``start`` (default: now)."""
         return CronIterator(self, start)
 
-    def __iter__(self) -> "CronIterator":
+    def __iter__(self) -> CronIterator:
         return CronIterator(self)
 
-    def ms_to_next(self, start: Optional[DateLike] = None) -> Optional[int]:
-        """Milliseconds from ``start`` (default: now) to the next run, or ``None``."""
+    def time_to_next(self, start: Optional[DateLike] = None) -> Optional[timedelta]:
+        """Time from ``start`` (default: now) to the next run, or ``None``."""
         now = _now()
         nxt = self._next_target(start, now)
         if nxt is None:
             return None
         reference = self._to_instant(start) if start is not None else now
-        return int((nxt - reference) / timedelta(milliseconds=1))
+        return nxt - reference
+
+    def ms_to_next(self, start: Optional[DateLike] = None) -> Optional[int]:
+        """Milliseconds from ``start`` (default: now) to the next run, or ``None``.
+
+        Prefer :meth:`time_to_next`, which returns a ``timedelta``.
+        """
+        remaining = self.time_to_next(start)
+        return None if remaining is None else int(remaining / timedelta(milliseconds=1))
 
     def match(self, value: DateLike) -> bool:
         """Whether a date matches the pattern (or the one-off date), to the second."""
@@ -274,8 +283,18 @@ class Cron:
         return None if self._once is not None else self.pattern.pattern
 
     def get_once(self) -> Optional[datetime]:
+        """The date of a one-off job, or ``None``. Same as :attr:`once`."""
+        return self.once
+
+    @property
+    def once(self) -> Optional[datetime]:
         """The date of a one-off job, or ``None``."""
         return self._output(self._once)
+
+    @property
+    def unref(self) -> bool:
+        """Alias of :attr:`daemon`."""
+        return self.daemon
 
     def is_running(self) -> bool:
         """Scheduled, and neither paused nor stopped, with a run ahead."""
@@ -327,24 +346,39 @@ class Cron:
         self._paused = False
         return not self._kill
 
-    def schedule(self, fn: Optional[Callable[..., Any]] = None) -> "Cron":
+    def schedule(self, fn: Optional[Callable[..., Any]] = None) -> Cron:
         """Schedule ``fn`` (or the function given to the constructor)."""
         with self._lock:
             if fn is not None and self.fn is not None:
                 raise CronError(
-                    "Cron: It is not allowed to schedule two functions using the same Croner instance."
+                    "a job can only schedule one function"
                 )
             if fn is not None:
                 if not callable(fn):
-                    raise CronError("Cron: fn must be callable.")
+                    raise CronError("fn must be callable")
                 self.fn = fn
             self._schedule()
         return self
 
-    def __call__(self, fn: Callable[..., Any]) -> Callable[..., Any]:
-        """Use the job as a decorator: ``@Cron("* * * * *")``."""
-        self.schedule(fn)
-        return fn
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Decorate a function, or call the scheduled function.
+
+        A job without a function is a decorator: ``@Cron("* * * * *")`` schedules the
+        decorated function and returns the job, so the job can be stopped and queried
+        through the function's name. Calling a job that has a function calls the
+        function directly, with the arguments given.
+        """
+        if self.fn is None:
+            if len(args) != 1 or kwargs or not callable(args[0]):
+                raise TypeError("a job without a function must be called with one function to decorate")
+            fn = args[0]
+            self.schedule(fn)
+            for attr in ("__module__", "__name__", "__qualname__", "__doc__"):
+                with contextlib.suppress(AttributeError, TypeError):
+                    object.__setattr__(self, attr, getattr(fn, attr))
+            self.__wrapped__ = fn
+            return self
+        return self.fn(*args, **kwargs)
 
     def trigger(self) -> None:
         """Run the function now, in the calling thread."""
@@ -381,7 +415,7 @@ class Cron:
                 wait = 1.0 if self._paused else 0.0
 
             timer = threading.Timer(wait, self._check_trigger, args=(target,))
-            timer.daemon = self.unref
+            timer.daemon = self.daemon
             self._timer = timer
             timer.start()
 
@@ -396,10 +430,10 @@ class Cron:
                 if self._max_runs is not None:
                     self._max_runs -= 1
                 self._begin_run(now)
-                worker = threading.Thread(target=self._run, args=(now,), daemon=self.unref)
+                worker = threading.Thread(target=self._run, args=(now,), daemon=self.daemon)
                 worker.start()
             elif should_run and blocked and callable(self.protect):
-                threading.Thread(target=self._call_protect, daemon=self.unref).start()
+                threading.Thread(target=self._call_protect, daemon=self.daemon).start()
             self._schedule(None if should_run else now)
 
     def _call_protect(self) -> None:
@@ -414,12 +448,10 @@ class Cron:
             if self.catch:
                 try:
                     self._call_fn()
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     if callable(self.catch):
-                        try:
+                        with contextlib.suppress(Exception):
                             self.catch(e, self)
-                        except Exception:  # noqa: BLE001
-                            pass
             else:
                 self._call_fn()
         finally:
@@ -446,7 +478,7 @@ class Cron:
         elif isinstance(value, date) and not isinstance(value, datetime):
             value = datetime(value.year, value.month, value.day)
         elif not isinstance(value, datetime):
-            raise CronError(f"CronDate: Invalid type ({type(value).__name__}) passed as date")
+            raise CronError(f"expected a datetime, date or ISO 8601 string, got {type(value).__name__}")
         if value.tzinfo is not None and value.utcoffset() is not None:
             return value.astimezone(UTC)
         return self._zone.to_instant(value.replace(tzinfo=None))
@@ -457,8 +489,8 @@ class Cron:
             return instant.replace(microsecond=0) + _ONE_SECOND
         return instant
 
-    def _enumerate(self, n: int, reference: Optional[DateLike], direction: int) -> List[datetime]:
-        runs: List[datetime] = []
+    def _enumerate(self, n: int, reference: Optional[DateLike], direction: int) -> list[datetime]:
+        runs: list[datetime] = []
         now = _now()
         current: Optional[DateLike] = reference
         while n > 0:
@@ -590,7 +622,7 @@ class Cron:
         step = timedelta(seconds=self.interval)
         skip_days = self.interval < 86400
         zone = self._zone
-        next_first: Dict[time, time] = {}  # time of the first run of a day -> of the next day
+        next_first: dict[time, time] = {}  # time of the first run of a day -> of the next day
         first: Optional[datetime] = None  # wall clock time of the first run of the current day
         at_first = False  # ``previous`` is ``first``
         previous = start_at
@@ -882,7 +914,25 @@ class Cron:
         return match
 
 
-def _find(table, value: int, direction: int) -> Optional[int]:
+def _whole(value: Union[int, float, timedelta], unit: int, message: str) -> int:
+    """``value`` as a whole number of ``unit`` seconds, from a number or a ``timedelta``."""
+    if isinstance(value, bool):
+        raise CronError(message)
+    if isinstance(value, timedelta):
+        quotient, remainder = divmod(value, timedelta(seconds=unit))
+        if remainder:
+            raise CronError(message)
+        return quotient
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise CronError(message) from None
+    if not number.is_integer():
+        raise CronError(message)
+    return int(number)
+
+
+def _find(table: Sequence[int], value: int, direction: int) -> Optional[int]:
     if direction == 1:
         for i in range(value, len(table)):
             if table[i]:
@@ -915,7 +965,7 @@ def _nearest_weekday(year: int, month: int, day: int, month_length: int) -> int:
     return day
 
 
-def _arguments(fn: Callable[..., Any], job: Cron, context: Any) -> tuple:
+def _arguments(fn: Callable[..., Any], job: Cron, context: Any) -> tuple[Any, ...]:
     try:
         params = inspect.signature(fn).parameters.values()
     except (TypeError, ValueError):
@@ -939,12 +989,12 @@ def _run_awaitable(awaitable: Any) -> None:
         asyncio.run(runner())
         return
     # A loop is already running in this thread, run the coroutine in a thread of its own
-    errors: List[BaseException] = []
+    errors: list[BaseException] = []
 
     def target() -> None:
         try:
             asyncio.run(runner())
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             errors.append(e)
 
     thread = threading.Thread(target=target)
@@ -967,7 +1017,7 @@ class CronIterator(Iterator[datetime]):
         self._remaining: float = self._initial_max_runs
         self.reset(start)
 
-    def __iter__(self) -> "CronIterator":
+    def __iter__(self) -> CronIterator:
         return self
 
     def __next__(self) -> datetime:

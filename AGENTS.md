@@ -25,6 +25,7 @@ src/croner/
 ├── _cron.py       # Cron, CronIterator: search, DST handling, scheduling
 ├── _zone.py       # Time zone resolution (zoneinfo, fixed offset, system local)
 ├── _describe.py   # Human readable descriptions (English)
+├── __main__.py    # python -m croner: describe a pattern and list runs
 └── _errors.py     # CronError
 tests/             # pytest
 tools/             # compare_with_js.py: differential test against croner (JS)
@@ -42,8 +43,10 @@ occurrences of a repeated time). Keep this behavior unless explicitly asked to c
 ## Development
 
 ```bash
-pip install -e . pytest
+pip install -e . pytest mypy ruff
 python -m pytest
+ruff check .
+mypy
 ```
 
 Also run the tests with a non-UTC system time zone, as CI does: `TZ=America/New_York python -m pytest`.
@@ -63,5 +66,9 @@ bumping it. Publishing to PyPI happens from `.github/workflows/publish.yml` when
 ## Key Points
 
 - Add tests for all changes.
+- Python names and idioms over JavaScript ones: snake_case, `timedelta` for durations, properties for
+  plain state, error messages that name the Python option. The other implementations decide behavior,
+  not API shape.
+- Breaking changes are planned in `docs/plan-2.0.md`.
 - No new runtime dependencies.
 - Update README.md when changing the public API.

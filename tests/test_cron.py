@@ -318,7 +318,9 @@ def test_decorator_and_trigger():
         calls.append(j)
 
     try:
-        assert job.fn is task
+        assert task is job
+        assert job.fn is task.__wrapped__
+        assert task.__name__ == "task"
         job.trigger()
         assert calls == [job]
         assert job.current_run() is not None
