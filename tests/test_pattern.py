@@ -83,6 +83,14 @@ def test_nicknames(nickname, expected):
     assert runs(nickname, 1) == [expected]
 
 
+def test_weekly_with_alternative_weekdays():
+    # Sunday is 1 with Quartz-style weekdays, @weekly still runs on Sundays
+    assert runs("@weekly", 2, alternative_weekdays=True) == [
+        "2024-01-07 00:00:00",
+        "2024-01-14 00:00:00",
+    ]
+
+
 def test_names_are_case_insensitive():
     assert runs("0 0 * jan,Feb mon", 2) == ["2024-01-08 00:00:00", "2024-01-15 00:00:00"]
     assert runs("0 0 * * FRI-SUN", 3) == [

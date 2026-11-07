@@ -46,6 +46,16 @@ class Zone:
                 raise CronError(f"CronDate: Failed to use timezone '{tz}': {e}") from None
             self.name = tz
         elif isinstance(tz, tzinfo):
+            zone = getattr(tz, "zone", None)
+            if isinstance(zone, str) and hasattr(tz, "localize"):
+                # A pytz zone gives wrong offsets unless used through localize(),
+                # use the same zone from zoneinfo instead
+                from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+                try:
+                    tz = ZoneInfo(zone)
+                except (ZoneInfoNotFoundError, ValueError) as e:
+                    raise CronError(f"CronDate: Failed to use timezone '{zone}': {e}") from None
             self.tzinfo = tz
             self.name = getattr(tz, "key", None) or str(tz)
         else:

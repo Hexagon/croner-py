@@ -8,8 +8,9 @@ same runs, DST included.
 
 *   Schedule functions, or just evaluate patterns: next runs, previous runs, matching.
 *   Works in any time zone, or a fixed UTC offset, with well defined DST behavior.
-*   Supports the [Open Cron Pattern Standard](https://github.com/open-source-cron/ocps) (OCPS) 1.0 - 1.4,
-    with optional seconds and years, `L`, `W`, `#`, `+` and `?`.
+*   Follows the [Open Cron Pattern Standard](https://github.com/open-source-cron/ocps) (OCPS) 1.0 - 1.4,
+    with optional seconds and years, `L`, `W`, `#`, `+` and `?`, with a few
+    [deviations](#ocps-conformance) shared with croner (JS).
 *   Over-run protection, error handling, pausing, max runs, intervals, start and stop dates, day offsets.
 *   Human readable descriptions of patterns.
 *   No dependencies, only the Python standard library. Fully typed.
@@ -128,7 +129,7 @@ and compare correctly as instants.
 | name                 | None    | str                 | Keep a reference to the job in `croner.scheduled_jobs`. The reference is removed on `stop()`. |
 | max_runs             | None    | int                 | Maximum number of runs, None for unlimited. |
 | catch                | False   | bool \| callable    | Catch errors raised by the function. `True` silently ignores them, a callable is called as `catch(error, job)`. |
-| timezone             | None    | str \| tzinfo       | Time zone in Europe/Stockholm format, or a `tzinfo`. |
+| timezone             | None    | str \| tzinfo       | Time zone in Europe/Stockholm format, or a `tzinfo` (`zoneinfo`, `dateutil`, or `pytz`, which is read through `zoneinfo`). |
 | utc_offset           | None    | int                 | Schedule with a fixed UTC offset in minutes. This does not take DST into account, you probably want `timezone`. |
 | start_at             | None    | datetime \| str     | Earliest run. Inclusive, a run exactly at `start_at` is included (except when `interval` is set). |
 | stop_at              | None    | datetime \| str     | Stop before this date. Exclusive, a run exactly at `stop_at` is not included. |
@@ -193,7 +194,7 @@ and on Mondays. Use the `+` modifier or `dom_and_dow=True` for AND.
 | Day of Month | Yes      | 1-31            | * , - / ? L W      | L = last day, W = nearest weekday |
 | Month        | Yes      | 1-12 or JAN-DEC | * , - / ?          | |
 | Day of Week  | Yes      | 0-7 or SUN-SAT  | * , - / ? L # +    | 0 and 7 = Sunday, 1-7 = Sunday-Saturday with `alternative_weekdays` |
-| Year         | Optional | 1-9999          | * , - /            | Defaults to * |
+| Year         | Optional | 1-9999          | * , - /            | Defaults to *. `*/2` matches even years, see below. |
 
 Weekday and month names are case-insensitive.
 
@@ -203,10 +204,26 @@ Weekday and month names are case-insensitive.
 |------------------------|---------------|
 | @yearly / @annually    | `0 0 1 1 *`   |
 | @monthly               | `0 0 1 * *`   |
-| @weekly                | `0 0 * * 0`   |
+| @weekly                | `0 0 * * 0`   (Sundays, also with `alternative_weekdays`) |
 | @daily / @midnight     | `0 0 * * *`   |
 | @hourly                | `0 * * * *`   |
 | @reboot                | Recognized, but raises `CronError`, as croner can't detect system startup. |
+
+#### OCPS conformance
+
+Croner passes the [OCPS conformance tests](https://github.com/open-source-cron/ocps/blob/main/data/conformance-tests.json),
+except where it keeps the behavior of croner (JS):
+
+*   **DST**: follows Vixie cron instead of OCPS 1.4 §4.3.1, as described above.
+*   **`?`** is accepted in every field, as an alias for `*`. OCPS 1.4 only allows it in day-of-month
+    and day-of-week.
+*   **Nicknames** are case-insensitive, `@Daily` works. OCPS 1.1 makes them case-sensitive.
+*   **`@reboot`** is rejected when the pattern is parsed. OCPS 1.1 accepts it at parse time and lets the
+    runtime reject it.
+*   **Years**: the supported range is 1-9999, wider than the portable 1970-2199. Wildcard steps in the
+    year field count from year 0 (which is never matched itself), so `*/2` matches even years, as OCPS
+    requires. Other steps can match other years than counting from 1970 would: `*/4` matches 2024,
+    2028, ..., where 1970-2199 gives 2026, 2030, .... Use a range, like `2026-2199/4`, to be portable.
 
 ### Pattern objects
 
