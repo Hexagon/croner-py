@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "croner"
+dynamic = ["version"]
+description = "Cron for Python. Parse and evaluate cron patterns, enumerate runs across time zones and DST, and schedule functions. A port of croner (JavaScript) and croner-rust, without dependencies."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Hexagon", email = "hexagon@56k.guru" }]
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["cron", "crontab", "scheduler", "schedule", "job", "timezone", "parser", "ocps"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+# Windows has no system time zone database, zoneinfo then needs the tzdata package
+tzdata = ["tzdata"]
+
+[project.urls]
+Homepage = "https://github.com/Hexagon/croner-py"
+Repository = "https://github.com/Hexagon/croner-py"
+Issues = "https://github.com/Hexagon/croner-py/issues"
+Changelog = "https://github.com/Hexagon/croner-py/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/croner/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/croner"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/croner", "tests", "README.md", "CHANGELOG.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

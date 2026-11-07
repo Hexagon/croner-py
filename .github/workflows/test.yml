@@ -1,0 +1,45 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python: "3.13"
+          - os: macos-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -e ".[tzdata]" pytest
+      - name: Test
+        run: python -m pytest -q
+
+  test-local-timezone:
+    # Jobs without a timezone use system local time, test it outside UTC
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tz: ["America/New_York", "Australia/Lord_Howe"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e . pytest
+      - run: python -m pytest -q
+        env:
+          TZ: ${{ matrix.tz }}
