@@ -75,9 +75,10 @@ def pattern():
     parts = [
         field(0, 59),
         field(0, 23),
-        field(1, 31, ("L", "15W", "1W", "LW", "L", "31W")),
-        field(1, 12, ("JAN", "FEB-MAR", "DEC")),
-        field(0, 7, ("MON-FRI", "5#L", "FRI#2", "1#1", "SUN", "5L", "+MON", "+1-5", "FRI-SUN", "6#5")),
+        field(1, 31, ("L", "15W", "1W", "LW", "L", "31W", "15,L", "5L", "L,LW")),
+        field(1, 12, ("JAN", "FEB-MAR", "DEC", "JANFEB", "*/2")),
+        field(0, 7, ("MON-FRI", "5#L", "FRI#2", "1#1", "SUN", "5L", "+MON", "+1-5", "FRI-SUN", "6#5",
+                     "SUN-SUN", "SAT-SUN", "SUN6", "8", "1-7", "MON-FRI/2", "FRIL")),
     ]
     if sec is not None:
         parts.insert(0, sec)
@@ -96,8 +97,12 @@ for _ in range(N):
         opts["timezone"] = tz
     if random.random() < 0.1:
         opts["domAndDow"] = True
-    if random.random() < 0.05:
-        opts["interval"] = random.randint(2, 100)
+    if random.random() < 0.1:
+        opts["interval"] = random.choice([random.randint(1, 100), 1800, 3600, 5400, 86400])
+    if random.random() < 0.2:
+        opts["fixedTimeRule"] = random.choice(["single-value", "no-wildcard"])
+    if random.random() < 0.1:
+        opts["alternativeWeekdays"] = True
     if random.random() < 0.1:
         opts["dayOffset"] = random.randint(-2, 2)
     cases.append({"pattern": pattern(), "options": opts, "ref": ref.isoformat().replace("+00:00", "Z"), "n": 5})
@@ -129,6 +134,10 @@ for c, j in zip(cases, js):
         kw["interval"] = o["interval"]
     if "dayOffset" in o:
         kw["day_offset"] = o["dayOffset"]
+    if "fixedTimeRule" in o:
+        kw["fixed_time_rule"] = o["fixedTimeRule"]
+    if "alternativeWeekdays" in o:
+        kw["alternative_weekdays"] = True
     try:
         job = Cron(c["pattern"], **kw)
         p = {

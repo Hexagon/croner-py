@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import MutableSequence, Sequence
+from functools import partial
 from typing import Any, Optional, Union
 
 from ._errors import CronError
 
 __all__ = [
     "ANY_OCCURRENCE",
+    "FIXED_TIME_RULES",
     "LAST_OCCURRENCE",
     "MODES",
     "OCCURRENCE_BITMASKS",
@@ -30,6 +32,17 @@ ANY_OCCURRENCE = 0b00001 | 0b00010 | 0b00100 | 0b01000 | 0b10000 | LAST_OCCURREN
 #: Accepted values for the ``mode`` option.
 MODES = ("auto", "5-part", "6-part", "7-part", "5-or-6-parts", "6-or-7-parts")
 
+#: Accepted values for the ``fixed_time_rule`` option, which decides which jobs are
+#: fixed-time jobs in DST handling:
+#:
+#: * ``"single-value"`` (default): a single value in each of second, minute and hour,
+#:   such as ``30 2 * * *``.
+#: * ``"no-wildcard"``: no wildcard (``*`` or ``?``) and no step in second, minute and
+#:   hour, so lists and ranges such as ``30 2,14 * * *`` count too. Close to Vixie cron.
+#: * ``"all"``: every job, as in croner 2.x. Same as ``FixedTimeRule::All`` in
+#:   croner-rust; croner (JS) has no such value.
+FIXED_TIME_RULES = ("single-value", "no-wildcard", "all")
+
 _MODE_PARTS = {
     "5-part": (5,),
     "6-part": (6,),
@@ -39,7 +52,8 @@ _MODE_PARTS = {
 }
 
 # Names are replaced in this order, so "-sun" must come before "sun": Sunday as
-# the upper bound of a range is 7, so that e.g. FRI-SUN is a valid range.
+# the upper bound of a range is 7, so that e.g. FRI-SUN is a valid range. SUN-SUN
+# is Sunday only, see _replace_alpha.
 _DAY_NAMES = (
     ("-sun", "-7"),
     ("sun", "0"),
@@ -91,6 +105,11 @@ _RANGE_STEP = re.compile(r"^(\d+)-(\d+)/(\d+)$")
 _ILLEGAL_DOM = re.compile(r"[^/*0-9,\-WwLl]")
 _ILLEGAL_DOW = re.compile(r"[^/*0-9,\-#Ll]")
 _ILLEGAL = re.compile(r"[^/*0-9,\-]")
+# A month or day name has to stand alone: no letter, digit, slash or hash before it, and
+# nothing but L (FRIL), a hyphen, a comma, a slash or a hash after it.
+_NAME_BEFORE = re.compile(r"[a-z\d/#]", re.IGNORECASE)
+_NAME_AFTER = re.compile(r"[a-km-z\d]", re.IGNORECASE)
+_ENDS_WITH_SUN = re.compile(r"(^|[^a-z\d])sun$", re.IGNORECASE)
 
 _Nth = Union[int, str, None]
 
@@ -117,6 +136,8 @@ class CronPattern:
     :param mode: Field count mode, one of :data:`MODES`.
     :param alternative_weekdays: Quartz-style weekday numbering (1 = Sunday ... 7 = Saturday).
     :param sloppy_ranges: Accept non-standard steps like ``/10`` or ``5/10``.
+    :param fixed_time_rule: Which jobs are fixed-time jobs in DST handling, one of
+        :data:`FIXED_TIME_RULES`.
     :raises CronError: If the pattern is invalid.
     """
 
@@ -127,6 +148,7 @@ class CronPattern:
         mode: str = "auto",
         alternative_weekdays: bool = False,
         sloppy_ranges: bool = False,
+        fixed_time_rule: str = "single-value",
     ) -> None:
         if not isinstance(pattern, str):
             raise CronError("pattern must be a str")
@@ -134,11 +156,18 @@ class CronPattern:
             raise CronError(
                 "mode must be one of " + ", ".join(repr(m) for m in MODES) + "."
             )
+        if fixed_time_rule not in FIXED_TIME_RULES:
+            raise CronError(
+                "fixed_time_rule must be one of "
+                + ", ".join(repr(r) for r in FIXED_TIME_RULES)
+                + "."
+            )
 
         self.pattern: str = pattern
         self.mode: str = mode
         self.alternative_weekdays: bool = alternative_weekdays
         self.sloppy_ranges: bool = sloppy_ranges
+        self.fixed_time_rule: str = fixed_time_rule
 
         self.second: list[int] = [0] * 60
         self.minute: list[int] = [0] * 60
@@ -156,8 +185,9 @@ class CronPattern:
         self.star_year: bool = False
         #: OCPS 1.4 ``+`` prefix in the day-of-week field: combine DOM and DOW with AND.
         self.use_and_logic: bool = False
-        #: Single, non-wildcard, non-stepped value in each of second, minute and hour.
-        #: Fixed-time and interval jobs handle DST transitions differently.
+        #: Fixed-time and interval jobs handle DST transitions differently. By default a
+        #: fixed-time job has a single, non-wildcard, non-stepped value in each of second,
+        #: minute and hour, see :data:`FIXED_TIME_RULES`.
         self.is_fixed_time: bool = False
 
         # Step and wildcard information, used by describe()
@@ -206,7 +236,17 @@ class CronPattern:
             self.last_weekday = True
             parts[3] = ""
         elif "L" in parts[3].upper():
-            parts[3] = re.sub("l", "", parts[3], flags=re.IGNORECASE)
+            # L is a value of its own: "L", "15,L" or "L,15"
+            items = parts[3].split(",")
+            if len(items) > 1 and any(item.upper() == "LW" for item in items):
+                raise CronError(
+                    f"Syntax error, LW can not be in a list in day-of-month ('{parts[3]}')."
+                )
+            if any(item == "" or (item.upper() != "L" and "L" in item.upper()) for item in items):
+                raise CronError(
+                    f"Syntax error, L has to be a value of its own in day-of-month ('{parts[3]}')."
+                )
+            parts[3] = ",".join(item for item in items if item.upper() != "L")
             self.last_day_of_month = True
 
         if parts[3] == "*":
@@ -251,10 +291,16 @@ class CronPattern:
         )
         self._part_to_array("year", parts[6], 0, 1)
 
-        def is_fixed(part: str, values: list[int]) -> bool:
-            return "*" not in part and "/" not in part and sum(1 for v in values if v) == 1
+        single_value = self.fixed_time_rule == "single-value"
 
-        self.is_fixed_time = (
+        def is_fixed(part: str, values: list[int]) -> bool:
+            return (
+                "*" not in part
+                and "/" not in part
+                and (not single_value or sum(1 for v in values if v) == 1)
+            )
+
+        self.is_fixed_time = self.fixed_time_rule == "all" or (
             is_fixed(parts[0], self.second)
             and is_fixed(parts[1], self.minute)
             and is_fixed(parts[2], self.hour)
@@ -308,8 +354,10 @@ class CronPattern:
         if "#" in rest:
             if kind != "day_of_week":
                 raise CronError("nth (#) only allowed in day-of-week field")
-            rest, _, nth_str = rest.partition("#")
-            nth = nth_str
+            pieces = rest.split("#")
+            if len(pieces) != 2 or pieces[1] == "":
+                raise CronError(f"Syntax error, illegal nth weekday: '{conf}'")
+            rest, nth = pieces
         elif rest.upper().endswith("L"):
             if kind != "day_of_week":
                 raise CronError(
@@ -336,10 +384,13 @@ class CronPattern:
 
     def _set_part(self, kind: str, index: int, value: _Nth) -> None:
         if kind == "day_of_week":
-            if index == 7:
+            # Sunday is both 0 and 7. Not with Quartz-style weekdays, where 7 is Saturday
+            # and index 7 comes from an 8.
+            if index == 7 and not self.alternative_weekdays:
                 index = 0
             if index < 0 or index > 6:
-                raise CronError(f"invalid value for day_of_week: {index}")
+                written = index + 1 if self.alternative_weekdays else index
+                raise CronError(f"invalid value for day_of_week: {written}")
             self._set_nth_weekday_of_month(index, value)
             return
 
@@ -444,8 +495,26 @@ class CronPattern:
 
     @staticmethod
     def _replace_alpha(conf: str, mapping: Sequence[tuple[str, str]]) -> str:
+        """Replace month or day names with their numbers.
+
+        A name has to stand alone, or ``SUN6`` would be read as 6 and ``JANFEB`` as 12.
+        ``SUN-SUN`` is Sunday only, not ``0-7``.
+        """
+
+        def replace(match: re.Match[str], value: str) -> str:
+            whole = match.string
+            # A name has three letters, a match of "-sun" also has the hyphen in front of them
+            start = match.end() - 3
+            before = whole[start - 1 : start] if start > 0 else ""
+            after = whole[start + 3 : start + 4]
+            if (before and _NAME_BEFORE.match(before)) or (after and _NAME_AFTER.match(after)):
+                raise CronError(f"Syntax error, a month or day name has to stand alone ('{conf}').")
+            if match.group().startswith("-") and _ENDS_WITH_SUN.search(whole[: match.start()]):
+                return "-0"
+            return value
+
         for name, value in mapping:
-            conf = re.sub(re.escape(name), value, conf, flags=re.IGNORECASE)
+            conf = re.sub(re.escape(name), partial(replace, value=value), conf, flags=re.IGNORECASE)
         return conf
 
     def _handle_nicknames(self, pattern: str) -> str:

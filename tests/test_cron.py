@@ -63,7 +63,7 @@ def _walk_runs_from(job, start_at, now):
     step = timedelta(seconds=job.interval)
     previous = start_at
     while previous + step <= now:
-        nxt = job._walk(previous, previous, 1, True)
+        nxt = job._find_occurrence(previous, 1, True)
         if nxt is None:
             break
         previous = nxt
@@ -105,9 +105,9 @@ def test_interval_with_start_at_long_ago():
     job = Cron(
         "* * * * * *", interval=2, timezone="Europe/Stockholm", start_at=now - timedelta(days=365)
     )
-    # Checked against walking every run. The repeated hour in October shifts the runs by a
-    # second, from odd to even seconds.
-    assert job._calculate_previous_run(job.start_at, now) == datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+    # The interval is elapsed time, so the DST changes in between do not shift the runs: a
+    # year is a whole number of 2 second steps from start_at.
+    assert job._calculate_previous_run(job.start_at, now) == datetime(2025, 6, 1, 12, 0, 1, tzinfo=UTC)
 
 
 def test_max_runs_limits_next_runs():
