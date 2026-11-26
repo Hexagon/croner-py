@@ -44,8 +44,12 @@ def _is_all_set(p: CronPattern, kind: str) -> bool:
 
 
 def _stepped_from_start(p: CronPattern, kind: str, values: list[int]) -> bool:
+    """The field holds the values of ``*/N``, so it can be described as "every N"."""
+    step = p.steps[kind]
+    if step <= 1:
+        return False
     minimum = 1 if kind == "month" else 0
-    return p.steps[kind] > 1 and bool(values) and values[0] == minimum
+    return values == list(range(minimum, minimum + _FIELD_SIZE[kind], step))
 
 
 def _text_list(items: list[str]) -> str:
@@ -207,7 +211,7 @@ def _describe_day(p: CronPattern, dom_and_dow: bool) -> str:
 def _describe_month(p: CronPattern) -> str:
     if _is_all_set(p, "month"):
         return ""
-    if p.steps["month"] > 1:
+    if _stepped_from_start(p, "month", _values(p, "month")):
         return f"in every {p.steps['month']} months"
     return "in " + _text_list([_MONTH_NAMES[m - 1] for m in _values(p, "month")])
 

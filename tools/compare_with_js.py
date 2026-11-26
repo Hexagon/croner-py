@@ -11,6 +11,12 @@ to this repository, or set CRONER_JS to the path of its src/croner.ts.
 croner (JS) 10.x and 11.0 skip a match after February 29 for some day-of-month patterns, where it
 overflows into March. Those differences are reported separately, after checking that the
 Python answer is the earlier, valid one.
+
+Where croner (JS) and croner-rust disagree, croner-py follows croner-rust, and those differences
+are reported separately too: croner (JS) rejects LW in a day-of-month list (L,LW) and day-of-week
+ranges that wrap around the week with alternativeWeekdays (SAT-SUN), which croner-py accepts. A
+fixed-time job in a DST gap that ends on the next day also differs, but none of the time zones and
+transitions here has such a gap.
 """
 
 import json
@@ -75,9 +81,10 @@ def pattern():
     parts = [
         field(0, 59),
         field(0, 23),
-        field(1, 31, ("L", "15W", "1W", "LW", "L", "31W")),
-        field(1, 12, ("JAN", "FEB-MAR", "DEC")),
-        field(0, 7, ("MON-FRI", "5#L", "FRI#2", "1#1", "SUN", "5L", "+MON", "+1-5", "FRI-SUN", "6#5")),
+        field(1, 31, ("L", "15W", "1W", "LW", "L", "31W", "15,L", "5L", "L,LW")),
+        field(1, 12, ("JAN", "FEB-MAR", "DEC", "JANFEB", "*/2")),
+        field(0, 7, ("MON-FRI", "5#L", "FRI#2", "1#1", "SUN", "5L", "+MON", "+1-5", "FRI-SUN", "6#5",
+                     "SUN-SUN", "SAT-SUN", "SUN6", "8", "1-7", "MON-FRI/2", "FRIL")),
     ]
     if sec is not None:
         parts.insert(0, sec)
@@ -96,8 +103,12 @@ for _ in range(N):
         opts["timezone"] = tz
     if random.random() < 0.1:
         opts["domAndDow"] = True
-    if random.random() < 0.05:
-        opts["interval"] = random.randint(2, 100)
+    if random.random() < 0.1:
+        opts["interval"] = random.choice([random.randint(1, 100), 1800, 3600, 5400, 86400])
+    if random.random() < 0.2:
+        opts["fixedTimeRule"] = random.choice(["single-value", "no-wildcard"])
+    if random.random() < 0.1:
+        opts["alternativeWeekdays"] = True
     if random.random() < 0.1:
         opts["dayOffset"] = random.randint(-2, 2)
     cases.append({"pattern": pattern(), "options": opts, "ref": ref.isoformat().replace("+00:00", "Z"), "n": 5})
@@ -118,6 +129,7 @@ def iso(d):
 
 bad = 0
 FEB29 = [0]
+RUST = [0]
 for c, j in zip(cases, js):
     o = c["options"]
     kw = {}
@@ -129,6 +141,10 @@ for c, j in zip(cases, js):
         kw["interval"] = o["interval"]
     if "dayOffset" in o:
         kw["day_offset"] = o["dayOffset"]
+    if "fixedTimeRule" in o:
+        kw["fixed_time_rule"] = o["fixedTimeRule"]
+    if "alternativeWeekdays" in o:
+        kw["alternative_weekdays"] = True
     try:
         job = Cron(c["pattern"], **kw)
         p = {
@@ -139,6 +155,13 @@ for c, j in zip(cases, js):
     except CronError:
         p = {"error": True}
     if p != j:
+        fields = c["pattern"].split()
+        dom, dow = fields[2:5:2] if len(fields) == 5 else fields[3:6:2]
+        if "error" in j and "error" not in p and (
+            ("LW" in dom.upper() and "," in dom) or (o.get("alternativeWeekdays") and "-" in dow)
+        ):
+            RUST[0] += 1
+            continue
         ok = (
             "error" not in p
             and "error" not in j
@@ -156,4 +179,7 @@ for c, j in zip(cases, js):
         bad += 1
         if bad <= 8:
             print("MISMATCH", c, "\n  js:", j, "\n  py:", p)
-print(f"{len(cases) - bad}/{len(cases)} agree, {FEB29[0]} of them differ only by the croner (JS) February 29 overflow")
+print(
+    f"{len(cases) - bad}/{len(cases)} agree, {FEB29[0]} of them differ only by the croner (JS) February 29 "
+    f"overflow, {RUST[0]} only where croner-py follows croner-rust"
+)

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from croner import Cron, CronError, CronPattern
+from croner._pattern import FIXED_TIME_RULES, LAST_OCCURRENCE, OCCURRENCE_BITMASKS
 
 UTC = timezone.utc
 REF = "2024-01-01T00:00:00Z"  # a Monday
@@ -292,7 +293,160 @@ def test_match():
         ("0 0 * * MON#2", "At 00:00, on the 2nd Monday of the month."),
         ("0 0 1 * +MON", "At 00:00, on day 1 (if it is also Monday)."),
         ("0 0 1 * MON", "At 00:00, on day 1 or Monday."),
+        ("0 0 LW * *", "At 00:00, on the last weekday of the month."),
+        # "every N" only for the values of */N, as in croner-rust
+        ("0-10/2 * * * *", "At minute 0, 2, 4, 6, 8, and 10 past every hour."),
+        ("*/15,7 * * * *", "At minute 0, 7, 15, 30, and 45 past every hour."),
+        ("0-59/15 * * * *", "At every 15 minutes."),
+        ("0 0 * 6-12/2 *", "At 00:00, in June, August, October, and December."),
+        ("0 0 * */3 *", "At 00:00, in every 3 months."),
+        ("0 0 * 1-12/3 *", "At 00:00, in every 3 months."),
     ],
 )
 def test_describe(pattern, expected):
     assert Cron(pattern).describe() == expected
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["0 0 * * SUN6", "0 0 * JANFEB *", "0 0 * * */FRI", "0 0 * * 5#FRI", "0 0 * DEC1 *", "0 0 * * MONTUE"],
+)
+def test_names_have_to_stand_alone(pattern):
+    with pytest.raises(CronError, match="has to stand alone"):
+        CronPattern(pattern)
+
+
+def test_names_next_to_modifiers_and_ranges():
+    assert CronPattern("0 0 * * FRIL").day_of_week[5] == LAST_OCCURRENCE
+    assert CronPattern("0 0 * * FRI#2").day_of_week[5] == OCCURRENCE_BITMASKS[1]
+    assert CronPattern("0 0 * * MON-FRI/2").values("day_of_week") == [1, 3, 5]
+    assert CronPattern("0 0 * JAN,FEB *").values("month") == [1, 2]
+    assert CronPattern("0 0 * * fri-sun").values("day_of_week") == [0, 5, 6]
+
+
+@pytest.mark.parametrize("pattern", ["0 0 * * SUN-SUN", "0 0 * * sun-sun", "0 0 * * SUN-SUN/2"])
+def test_sun_sun_is_sunday_only(pattern):
+    assert CronPattern(pattern).values("day_of_week") == [0]
+    assert runs(pattern, ref="2025-01-01T00:00:00Z") == [
+        "2025-01-05 00:00:00",
+        "2025-01-12 00:00:00",
+        "2025-01-19 00:00:00",
+    ]
+
+
+def test_ranges_ending_on_sunday_are_unchanged():
+    assert CronPattern("0 0 * * SAT-SUN").values("day_of_week") == [0, 6]
+    assert CronPattern("0 0 * * 0-SUN").values("day_of_week") == list(range(7))
+    assert CronPattern("0 0 * * 0-7").values("day_of_week") == list(range(7))
+
+
+@pytest.mark.parametrize(
+    "pattern,expected",
+    [
+        ("0 0 * * SAT-SUN", [0, 6]),
+        ("0 0 * * 7-1", [0, 6]),
+        ("0 0 * * MON-SUN", list(range(7))),
+        ("0 0 * * FRI-MON", [0, 1, 5, 6]),
+        ("0 0 * * FRI-TUE/2", [0, 2, 5]),
+        ("0 0 * * SUN-SAT", list(range(7))),
+    ],
+)
+def test_quartz_ranges_wrap_around_the_week(pattern, expected):
+    # As in Quartz and croner-rust
+    assert CronPattern(pattern, alternative_weekdays=True).values("day_of_week") == expected
+
+
+def test_quartz_wrapping_range_runs():
+    assert runs("0 0 * * FRI-TUE/2", 3, "2025-01-01T00:00:00Z", alternative_weekdays=True) == [
+        "2025-01-03 00:00:00",
+        "2025-01-05 00:00:00",
+        "2025-01-07 00:00:00",
+    ]
+    assert CronPattern("0 0 * * FRI-SUN#2", alternative_weekdays=True).day_of_week == [2, 0, 0, 0, 0, 2, 2]
+
+
+@pytest.mark.parametrize("pattern", ["0 0 * * SAT-SUN", "0 0 * * 5-1", "0 0 * * FRI-TUE/2"])
+def test_standard_ranges_do_not_wrap(pattern):
+    if pattern == "0 0 * * SAT-SUN":
+        assert CronPattern(pattern).values("day_of_week") == [0, 6]  # SUN is 7 here
+        return
+    with pytest.raises(CronError, match="larger than"):
+        CronPattern(pattern)
+
+
+@pytest.mark.parametrize("pattern", ["0 0 * * 8", "0 0 * * 1-8", "0 0 * * 0"])
+def test_quartz_weekdays_are_1_to_7(pattern):
+    with pytest.raises(CronError, match="day_of_week"):
+        CronPattern(pattern, alternative_weekdays=True)
+    assert CronPattern("0 0 * * 1-7", alternative_weekdays=True).values("day_of_week") == list(range(7))
+    assert CronPattern("0 0 * * 7", alternative_weekdays=True).values("day_of_week") == [6]
+
+
+@pytest.mark.parametrize(
+    "pattern", ["0 0 5L * *", "0 0 L5 * *", "0 0 LL * *", "0 0 1,5L * *", "0 0 L, * *", "0 0 LW-5 * *", "0 0 5LW * *"]
+)
+def test_l_is_a_value_of_its_own_in_day_of_month(pattern):
+    with pytest.raises(CronError, match="L and LW have to be values of their own"):
+        CronPattern(pattern)
+
+
+def test_lw_in_a_list():
+    # As in croner-rust: L and LW keep both meanings in a list
+    p = CronPattern("0 0 L,LW * *")
+    assert p.last_day_of_month and p.last_weekday
+    # May 2025 ends on a Saturday: the last weekday is Friday the 30th
+    assert runs("0 0 L,LW * *", ref="2025-05-01T00:00:00Z") == [
+        "2025-05-30 00:00:00",
+        "2025-05-31 00:00:00",
+        "2025-06-30 00:00:00",
+    ]
+    assert runs("0 0 lw,l * *", ref="2025-05-01T00:00:00Z") == runs("0 0 L,LW * *", ref="2025-05-01T00:00:00Z")
+    assert runs("0 0 1W,15W,LW * *", ref="2025-01-01T00:00:00Z") == [
+        "2025-01-15 00:00:00",
+        "2025-01-31 00:00:00",
+        "2025-02-03 00:00:00",
+    ]
+    p = CronPattern("0 0 LW * *")
+    assert p.last_weekday and not p.last_day_of_month
+
+
+def test_l_in_a_list():
+    p = CronPattern("0 0 15,L * *")
+    assert p.values("day") == [15]
+    assert p.last_day_of_month
+
+
+@pytest.mark.parametrize("pattern", ["0 0 * * 5##2", "0 0 * * 5#", "0 0 * * 5#1#2"])
+def test_illegal_nth_weekday(pattern):
+    with pytest.raises(CronError, match="illegal nth weekday"):
+        CronPattern(pattern)
+
+
+@pytest.mark.parametrize(
+    "pattern,single_value,no_wildcard",
+    [
+        ("30 2 * * *", True, True),
+        ("0 30 2 * * *", True, True),
+        ("30 2,14 * * *", False, True),
+        ("0-30 2 * * *", False, True),
+        ("0 0-23/2 * * *", False, False),
+        ("*/30 2 * * *", False, False),
+        ("30 * * * *", False, False),
+        ("30 ? * * *", False, False),
+        ("* 30 2 * * *", False, False),
+    ],
+)
+def test_fixed_time_rule(pattern, single_value, no_wildcard):
+    assert CronPattern(pattern).is_fixed_time is single_value
+    assert CronPattern(pattern, fixed_time_rule="single-value").is_fixed_time is single_value
+    assert CronPattern(pattern, fixed_time_rule="no-wildcard").is_fixed_time is no_wildcard
+    assert CronPattern(pattern, fixed_time_rule="all").is_fixed_time
+    assert Cron(pattern, fixed_time_rule="no-wildcard").fixed_time_rule == "no-wildcard"
+
+
+def test_fixed_time_rule_is_validated():
+    with pytest.raises(CronError, match="fixed_time_rule"):
+        CronPattern("* * * * *", fixed_time_rule="vixie")
+    with pytest.raises(CronError, match="fixed_time_rule"):
+        Cron("* * * * *", fixed_time_rule="vixie")
+    assert FIXED_TIME_RULES == ("single-value", "no-wildcard", "all")

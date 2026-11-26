@@ -13,7 +13,7 @@ from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Any, Callable, Optional, Union
 
 from ._errors import CronError
-from ._pattern import LAST_OCCURRENCE, MODES, OCCURRENCE_BITMASKS, CronPattern
+from ._pattern import FIXED_TIME_RULES, LAST_OCCURRENCE, MODES, OCCURRENCE_BITMASKS, CronPattern
 from ._zone import UTC, Zone, parse_iso
 
 __all__ = ["Cron", "CronIterator", "scheduled_jobs"]
@@ -79,6 +79,8 @@ class Cron:
     :param context: Passed as the second argument to ``fn``.
     :param alternative_weekdays: Quartz-style weekdays (1 = Sunday ... 7 = Saturday).
     :param sloppy_ranges: Accept non-standard steps like ``/10`` and ``5/10``.
+    :param fixed_time_rule: Which jobs are fixed-time jobs in DST handling:
+        ``"single-value"`` (default), ``"no-wildcard"`` or ``"all"``. See the README.
     :param allow_past: Let a one-off job dated in the past run immediately.
 
     Times without a time zone (naive datetimes and ISO strings without an offset)
@@ -112,6 +114,7 @@ class Cron:
         alternative_weekdays: bool = False,
         sloppy_ranges: bool = False,
         allow_past: bool = False,
+        fixed_time_rule: str = "single-value",
     ) -> None:
         if fn is not None and not callable(fn):
             raise CronError("fn must be callable")
@@ -130,6 +133,10 @@ class Cron:
         if mode not in MODES:
             raise CronError(
                 "mode must be one of " + ", ".join(repr(m) for m in MODES)
+            )
+        if fixed_time_rule not in FIXED_TIME_RULES:
+            raise CronError(
+                "fixed_time_rule must be one of " + ", ".join(repr(r) for r in FIXED_TIME_RULES)
             )
         interval = _whole(interval, 1, "interval must be a whole number of seconds or a timedelta")
         if interval < 0:
@@ -170,6 +177,7 @@ class Cron:
         self.allow_past: bool = allow_past
         self.alternative_weekdays: bool = alternative_weekdays
         self.sloppy_ranges: bool = sloppy_ranges
+        self.fixed_time_rule: str = fixed_time_rule
         self.timezone = timezone
         self.utc_offset = utc_offset
         self._zone = Zone(utc_offset if utc_offset is not None else timezone)
@@ -208,6 +216,7 @@ class Cron:
                 mode=mode,
                 alternative_weekdays=alternative_weekdays,
                 sloppy_ranges=sloppy_ranges,
+                fixed_time_rule=fixed_time_rule,
             )
         p = self.pattern
         self._nearest_days = [i + 1 for i, v in enumerate(p.nearest_weekdays) if v]
@@ -639,7 +648,7 @@ class Cron:
                     previous, first = instant, wall
                 if previous + step > now:
                     break
-            nxt = self._walk(previous, previous, 1, True)
+            nxt = self._find_occurrence(previous, 1, True)
             if nxt is None:
                 break
             wall = zone.wall(nxt)
@@ -691,9 +700,19 @@ class Cron:
         of the wall clock covers only one pass of it. If the reference is on the pass
         the search meets first, the other pass still lies ahead, so it is walked too,
         and the nearer match wins. Same algorithm as croner (JS) and croner-rust.
+
+        The ``interval`` option is elapsed time from the previous run, which is the
+        reference, so the search starts from the last second that is too soon. A DST
+        change in between then neither shortens nor stretches it. Backward searches
+        always count the interval.
         """
         zone = self._zone
-        found = self._walk(reference, reference, direction, has_previous)
+        if self.interval > 1 and (direction == -1 or has_previous):
+            try:
+                reference = reference + timedelta(seconds=(self.interval - 1) * direction)
+            except OverflowError:
+                return None  # past year 1 or 9999
+        found = self._walk(reference, reference, direction)
 
         if (self.pattern.is_fixed_time and direction == 1) or zone.is_fixed:
             return found
@@ -709,7 +728,7 @@ class Cron:
         if found is not None and (edge - found) * direction > timedelta(0):
             return found
 
-        other = self._walk(edge, edge - _ONE_MICROSECOND * direction, direction, False, True)
+        other = self._walk(edge, edge - _ONE_MICROSECOND * direction, direction, True)
         if found is None or other is None:
             return found if found is not None else other
         return other if (found - other) * direction > timedelta(0) else found
@@ -719,31 +738,31 @@ class Cron:
         start: datetime,
         reference: datetime,
         direction: int,
-        has_previous: bool,
         inclusive: bool = False,
     ) -> Optional[datetime]:
         """Walk the wall clock from ``start`` to the first match that runs after
         (direction 1) or before (-1) ``reference``."""
         try:
-            wall = self._zone.wall(start).replace(microsecond=0)
+            exact = self._zone.wall(start)
         except (OverflowError, ValueError, OSError):
             return None
+        wall = exact.replace(microsecond=0)
 
-        def step_size(first: bool) -> int:
-            if self.interval > 1 and (direction == -1 or (first and has_previous)):
-                return self.interval
-            return 1
+        # Searching back from a reference with a fraction of a second, its own second is
+        # already past, so it is the first candidate. Not with an interval, also of one
+        # second, as that second is too close to the reference.
+        first_step = 0 if direction == -1 and exact.microsecond and not self.interval else 1
 
         limit_year = wall.year
         if inclusive and self._matches_wall(wall):
             candidate: Optional[datetime] = wall
         else:
-            candidate = self._search(wall, step_size(True) * direction, direction, limit_year)
+            candidate = self._search(wall, first_step * direction, direction, limit_year)
         while candidate is not None:
             run = self._run_at(candidate, reference, direction)
             if run is not None:
                 return run
-            candidate = self._search(candidate, step_size(False) * direction, direction, limit_year)
+            candidate = self._search(candidate, direction, direction, limit_year)
         return None
 
     def _run_at(self, wall: datetime, reference: datetime, direction: int) -> Optional[datetime]:
@@ -754,7 +773,9 @@ class Cron:
         * A time that occurs twice (fall back) runs once, at its first occurrence, for
           fixed-time jobs, and on both occurrences for interval jobs.
         * A time that doesn't exist (spring forward) is skipped by interval jobs, and runs
-          when the clock has jumped forward for fixed-time jobs, if that is on the same day.
+          when the clock has jumped forward for fixed-time jobs, if the date it has jumped
+          to matches the date fields of the pattern. As in croner-rust, so a gap that
+          ends at midnight moves a daily run to the next day.
         """
         zone = self._zone
 
@@ -787,9 +808,17 @@ class Cron:
         after_offset = zone._at(wall, 1)
         before_offset = zone._at(wall, 0)
         gap_end = zone.find_offset_change(min(after_offset, before_offset), max(after_offset, before_offset))
-        if zone.wall(gap_end).date() == wall.date() and ahead(gap_end):
+        if ahead(gap_end) and self._date_matches(zone.wall(gap_end)):
             return gap_end
         return None
+
+    def _date_matches(self, w: datetime) -> bool:
+        p = self.pattern
+        return bool(
+            (p.star_year or p.year[w.year])
+            and p.month[w.month - 1]
+            and self._day_match(w.year, w.month, w.day)
+        )
 
     # -------------------------------------------------- wall clock search
 

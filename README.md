@@ -42,6 +42,9 @@ next_sundays = Cron("0 0 * * SUN").next_runs(100)
 for run in islice(Cron("0 9 * * MON-FRI", timezone="Europe/Stockholm"), 5):
     print(run.isoformat())
 
+# Every Monday in January 2025: enumerate() from a start date stops at stop_at (exclusive)
+mondays = list(Cron("0 0 * * MON", stop_at="2025-02-01").enumerate("2025-01-01"))
+
 # Days left to Christmas Eve (a timedelta)
 days_left = Cron("0 0 24 12 *").time_to_next().days
 
@@ -159,7 +162,7 @@ and compare correctly as instants.
 | utc_offset           | None    | int \| timedelta    | Schedule with a fixed UTC offset, in minutes or as a `timedelta`. This does not take DST into account, you probably want `timezone`. |
 | start_at             | None    | datetime \| str     | Earliest run. Inclusive, a run exactly at `start_at` is included (except when `interval` is set). |
 | stop_at              | None    | datetime \| str     | Stop before this date. Exclusive, a run exactly at `stop_at` is not included. |
-| interval             | 0       | int \| timedelta    | Minimum time between runs, in seconds or as a `timedelta`. |
+| interval             | 0       | int \| timedelta    | Minimum time between runs, in seconds or as a `timedelta`. Counted in elapsed time, so a DST change in between neither shortens nor stretches it. |
 | paused               | False   | bool                | Start paused. |
 | context              | None    | Any                 | Passed as the second argument to the function. |
 | dom_and_dow          | False   | bool                | Combine day-of-month and day-of-week with AND (True) or OR (False). |
@@ -172,6 +175,7 @@ and compare correctly as instants.
 | day_offset           | 0       | int                 | Shift every run by a number of days, e.g. `-1` for the day before each match. All methods and `start_at` / `stop_at` refer to the shifted time. |
 | mode                 | "auto"  | str                 | How many fields the pattern has: `"auto"`, `"5-part"`, `"6-part"`, `"7-part"`, `"5-or-6-parts"` or `"6-or-7-parts"`. |
 | sloppy_ranges        | False   | bool                | Accept non-standard steps, like `/10`, `5/5` or `30/30`. By default only `*/step` and `min-max/step` are allowed. |
+| fixed_time_rule      | "single-value" | str          | Which jobs are fixed-time jobs in DST handling: `"single-value"`, `"no-wildcard"` or `"all"`. See DST below. |
 
 Invalid patterns and options raise `croner.CronError`, a subclass of `ValueError`.
 
@@ -200,13 +204,24 @@ Patterns are based on [Vixie cron](https://en.wikipedia.org/wiki/Cron#CRON_expre
 *   **+**: Prefix the day-of-week field to combine it with day-of-month using AND:
     `0 12 1 * +MON` only runs when the 1st is a Monday.
 *   **?**: An alias for `*`. Non-portable, avoid it in patterns meant for other systems.
-*   **DST** follows Vixie cron, deviating from OCPS 1.4 §4.3.1:
-    *   **Fixed-time jobs**, with a single value in each of second, minute and hour (e.g. `0 30 2 * * *`):
-        a time that occurs twice (fall back) runs once, at the first occurrence. A time that doesn't
-        exist (spring forward) runs at the first valid time after the gap, on the same day.
-    *   **Interval jobs**, with a wildcard, step, range or list in second, minute or hour
-        (e.g. `*/5 * * * *` or `0 30 1,2 * * *`): a time that occurs twice runs on both occurrences.
-        A time that doesn't exist is skipped.
+*   **DST** is handled as in croner (JS) and croner-rust, close to Vixie cron and deviating from OCPS 1.4
+    §4.3.1. Jobs are either fixed-time jobs or interval jobs:
+    *   **Fixed-time jobs**, by default those with a single value in each of second, minute and hour
+        (e.g. `0 30 2 * * *`): a time that occurs twice (fall back) runs once, at the first occurrence. A
+        time that doesn't exist (spring forward) runs at the first valid time after the gap, if that date
+        still matches the day, month and year fields. When a gap ends at midnight, that is the next day:
+        `30 23 * * *` then runs at 00:00, and `30 23 30 * *` skips that month. This holds for gaps of any
+        length, such as the day `Pacific/Apia` skipped in 2011. Same as croner-rust; croner (JS) only
+        runs it if the end of the gap is on the same day.
+    *   **Interval jobs**, all others (e.g. `*/5 * * * *` or `0 30 1,2 * * *`): a time that occurs twice
+        runs on both occurrences. A time that doesn't exist is skipped.
+    *   The `fixed_time_rule` option decides which jobs are fixed-time jobs. `"single-value"` is the
+        default above. With `"no-wildcard"`, a job without a wildcard (`*` or `?`) or step in second,
+        minute and hour is a fixed-time job, so lists and ranges like `0 30 1,2 * * *` count too. This is
+        closer to Vixie cron, which treats a job as an interval job only when its minute or hour field
+        starts with `*`, but unlike Vixie cron a step without `*` (`0 0-23/2 * * *`) still makes an
+        interval job. With `"all"`, every job is a fixed-time job, as in croner 2.x and
+        `FixedTimeRule::All` in croner-rust (croner for JavaScript has no such value).
     *   `next_run()`, `next_runs()`, `previous_runs()` and `enumerate()` move in real time. They never
         return a time they have passed, and cover the first pass through a repeated hour before the second.
 
@@ -223,7 +238,13 @@ and on Mondays. Use the `+` modifier or `dom_and_dow=True` for AND.
 | Day of Week  | Yes      | 0-7 or SUN-SAT  | * , - / ? L # +    | 0 and 7 = Sunday, 1-7 = Sunday-Saturday with `alternative_weekdays` |
 | Year         | Optional | 1-9999          | * , - /            | Defaults to *. `*/2` matches even years, see below. |
 
-Weekday and month names are case-insensitive.
+Weekday and month names are case-insensitive, and have to stand alone: `SUN6`, `JANFEB` and `*/FRI` are
+errors. `SUN-SUN` is Sunday only. With `alternative_weekdays`, weekdays are 1-7, so `0` and `8` are errors.
+
+In day-of-month, `L` and `LW` are values of their own: `L`, `15,L` or `L,LW` (the last day and the last
+weekday). With `alternative_weekdays`, a day-of-week range whose end is before its start wraps around
+the week, as in Quartz: `SAT-SUN` is Saturday and Sunday, `FRI-MON` Friday to Monday. These follow
+croner-rust; croner (JS) rejects them.
 
 **Nicknames**:
 
