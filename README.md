@@ -208,8 +208,11 @@ Patterns are based on [Vixie cron](https://en.wikipedia.org/wiki/Cron#CRON_expre
     §4.3.1. Jobs are either fixed-time jobs or interval jobs:
     *   **Fixed-time jobs**, by default those with a single value in each of second, minute and hour
         (e.g. `0 30 2 * * *`): a time that occurs twice (fall back) runs once, at the first occurrence. A
-        time that doesn't exist (spring forward) runs at the first valid time after the gap, if that is on
-        the same day.
+        time that doesn't exist (spring forward) runs at the first valid time after the gap, if that date
+        still matches the day, month and year fields. When a gap ends at midnight, that is the next day:
+        `30 23 * * *` then runs at 00:00, and `30 23 30 * *` skips that month. This holds for gaps of any
+        length, such as the day `Pacific/Apia` skipped in 2011. Same as croner-rust; croner (JS) only
+        runs it if the end of the gap is on the same day.
     *   **Interval jobs**, all others (e.g. `*/5 * * * *` or `0 30 1,2 * * *`): a time that occurs twice
         runs on both occurrences. A time that doesn't exist is skipped.
     *   The `fixed_time_rule` option decides which jobs are fixed-time jobs. `"single-value"` is the
@@ -238,7 +241,10 @@ and on Mondays. Use the `+` modifier or `dom_and_dow=True` for AND.
 Weekday and month names are case-insensitive, and have to stand alone: `SUN6`, `JANFEB` and `*/FRI` are
 errors. `SUN-SUN` is Sunday only. With `alternative_weekdays`, weekdays are 1-7, so `0` and `8` are errors.
 
-In day-of-month, `L` is a value of its own (`L`, or in a list like `15,L`), and `LW` stands alone.
+In day-of-month, `L` and `LW` are values of their own: `L`, `15,L` or `L,LW` (the last day and the last
+weekday). With `alternative_weekdays`, a day-of-week range whose end is before its start wraps around
+the week, as in Quartz: `SAT-SUN` is Saturday and Sunday, `FRI-MON` Friday to Monday. These follow
+croner-rust; croner (JS) rejects them.
 
 **Nicknames**:
 

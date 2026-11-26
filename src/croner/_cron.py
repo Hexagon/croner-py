@@ -773,7 +773,9 @@ class Cron:
         * A time that occurs twice (fall back) runs once, at its first occurrence, for
           fixed-time jobs, and on both occurrences for interval jobs.
         * A time that doesn't exist (spring forward) is skipped by interval jobs, and runs
-          when the clock has jumped forward for fixed-time jobs, if that is on the same day.
+          when the clock has jumped forward for fixed-time jobs, if the date it has jumped
+          to matches the date fields of the pattern. As in croner-rust, so a gap that
+          ends at midnight moves a daily run to the next day.
         """
         zone = self._zone
 
@@ -806,9 +808,17 @@ class Cron:
         after_offset = zone._at(wall, 1)
         before_offset = zone._at(wall, 0)
         gap_end = zone.find_offset_change(min(after_offset, before_offset), max(after_offset, before_offset))
-        if zone.wall(gap_end).date() == wall.date() and ahead(gap_end):
+        if ahead(gap_end) and self._date_matches(zone.wall(gap_end)):
             return gap_end
         return None
+
+    def _date_matches(self, w: datetime) -> bool:
+        p = self.pattern
+        return bool(
+            (p.star_year or p.year[w.year])
+            and p.month[w.month - 1]
+            and self._day_match(w.year, w.month, w.day)
+        )
 
     # -------------------------------------------------- wall clock search
 

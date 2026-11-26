@@ -101,21 +101,19 @@ Python has it.
 - **`Literal` types for `mode` and `fixed_time_rule`**, so type checkers catch a misspelled value.
   Breaks type checking (not running) for callers that pass a plain `str` variable, so 2.0.
 
-## Open questions: croner-rust and croner (JS) disagree
+## Where croner-rust and croner (JS) disagree
 
-croner-py follows croner (JS) where the two differ. Checked against croner-rust 5.0.1 (main,
-2026-11-26) and croner (JS) 11.0.1 (dev, 2026-11-24):
+Checked against croner-rust 5.0.1 (main, 2026-11-26) and croner (JS) 11.0.1 (dev, 2026-11-24).
+In each item, croner-py has the behavior described first, from the implementation in parentheses.
+Issues are filed upstream for the other one:
 
-- **A fixed-time job in a DST gap that ends on the next day.** croner (JS) and croner-py run it at the
-  end of the gap only if that is on the same day, so `30 23 * * *` in `America/Nuuk` has no run on
-  2024-03-30, and `0 12 * * *` in `Pacific/Apia` none on the skipped 2011-12-30. croner-rust runs it
-  at the end of the gap when that day matches the date fields (2024-03-31 00:00 and 2011-12-31 00:00).
-- **Day-of-week ranges that wrap with `alternative_weekdays`** (`SAT-SUN`, `FRI-MON`, `7-1`):
-  croner-rust wraps them around the week, as Quartz does. croner (JS) and croner-py reject them.
-- **`LW` in a day-of-month list** (`L,LW`, `1W,15W,LW`): croner-rust accepts it, croner (JS) and
-  croner-py reject it.
-- **Names that do not stand alone** (`SUN6`, `JANFEB`, `*/FRI`): croner (JS) and croner-py reject them,
-  croner-rust reads them as numbers (`6`, `12`, `*/5`).
+- **A fixed-time job in a DST gap that ends on the next day** runs at the end of the gap when that day
+  matches the date fields (croner-rust). croner (JS) only runs it on the same day.
+- **Day-of-week ranges that wrap with `alternative_weekdays`** (`SAT-SUN`, `FRI-MON`, `7-1`) wrap
+  around the week, as in Quartz (croner-rust). croner (JS) rejects them.
+- **`LW` in a day-of-month list** (`L,LW`, `1W,15W,LW`) is accepted (croner-rust). croner (JS) rejects it.
+- **Names that do not stand alone** (`SUN6`, `JANFEB`, `*/FRI`) are rejected (croner (JS)). croner-rust
+  still reads them as numbers (`6`, `12`, `*/5`).
 - **`fixed_time_rule="all"`** exists in croner-rust and croner-py, not in croner (JS).
 
 ## Release checklist

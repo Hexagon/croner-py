@@ -11,6 +11,12 @@ to this repository, or set CRONER_JS to the path of its src/croner.ts.
 croner (JS) 10.x and 11.0 skip a match after February 29 for some day-of-month patterns, where it
 overflows into March. Those differences are reported separately, after checking that the
 Python answer is the earlier, valid one.
+
+Where croner (JS) and croner-rust disagree, croner-py follows croner-rust, and those differences
+are reported separately too: croner (JS) rejects LW in a day-of-month list (L,LW) and day-of-week
+ranges that wrap around the week with alternativeWeekdays (SAT-SUN), which croner-py accepts. A
+fixed-time job in a DST gap that ends on the next day also differs, but none of the time zones and
+transitions here has such a gap.
 """
 
 import json
@@ -123,6 +129,7 @@ def iso(d):
 
 bad = 0
 FEB29 = [0]
+RUST = [0]
 for c, j in zip(cases, js):
     o = c["options"]
     kw = {}
@@ -148,6 +155,13 @@ for c, j in zip(cases, js):
     except CronError:
         p = {"error": True}
     if p != j:
+        fields = c["pattern"].split()
+        dom, dow = fields[2:5:2] if len(fields) == 5 else fields[3:6:2]
+        if "error" in j and "error" not in p and (
+            ("LW" in dom.upper() and "," in dom) or (o.get("alternativeWeekdays") and "-" in dow)
+        ):
+            RUST[0] += 1
+            continue
         ok = (
             "error" not in p
             and "error" not in j
@@ -165,4 +179,7 @@ for c, j in zip(cases, js):
         bad += 1
         if bad <= 8:
             print("MISMATCH", c, "\n  js:", j, "\n  py:", p)
-print(f"{len(cases) - bad}/{len(cases)} agree, {FEB29[0]} of them differ only by the croner (JS) February 29 overflow")
+print(
+    f"{len(cases) - bad}/{len(cases)} agree, {FEB29[0]} of them differ only by the croner (JS) February 29 "
+    f"overflow, {RUST[0]} only where croner-py follows croner-rust"
+)

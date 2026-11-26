@@ -22,15 +22,24 @@ Brings croner-py up to date with croner (JS) 11.0.1, plus the fixes on its dev b
 - `SUN-SUN` matches Sundays only. It was read as `0-7` and matched every day.
 - With `alternative_weekdays=True`, day-of-week `8` raises `CronError`. It was read as Sunday. Quartz
   weekdays are 1-7.
-- `L` in day-of-month has to be a value of its own (`L`, `15,L`). An `L` anywhere else in the field was
-  dropped, so `5L` meant the 5th and the last day. `LW` in a list, such as `1W,15W,LW`, raises an error
-  that says so.
+- `L` and `LW` in day-of-month have to be values of their own. An `L` anywhere else in the field was
+  dropped, so `5L` meant the 5th and the last day; it raises `CronError` now.
+- `LW` can be in a day-of-month list, as in croner-rust: `L,LW` is the last day and the last weekday,
+  `1W,15W,LW` three days a month. It raised `CronError`.
+- With `alternative_weekdays=True`, a day-of-week range whose end is before its start wraps around the
+  week, as in Quartz and croner-rust: `SAT-SUN` is Saturday and Sunday, `FRI-MON` Friday to Monday, and
+  `FRI-TUE/2` Friday, Sunday and Tuesday. These raised `CronError`, since Sunday is 1 in that mode.
+- A fixed-time job in a DST gap runs at the end of the gap if that date matches the day, month and year
+  fields, as in croner-rust. Before, it had to be the same day, so a gap that ends at midnight dropped the
+  run: `30 23 * * *` in `America/Nuuk` had no run on 2024-03-30, and `0 12 * * *` in `Pacific/Apia` none
+  for the day Samoa skipped in 2011. They now run at 00:00 the next day.
 - An nth weekday with more than one `#` or nothing after it (`5##2`, `5#`) raises an error that says so.
 - `describe()` calls a stepped field "every N" only when it holds the values of `*/N`, as in croner-rust.
   `0-10/2 * * * *` was "At every 2 minutes.", and `*/15,7 * * * *` dropped the 7. In the month field,
   `0 0 * 6-12/2 *` is now "in June, August, October, and December".
 - `tools/compare_with_js.py` also covers `interval` across DST changes, `fixed_time_rule`,
-  `alternative_weekdays` and the patterns above.
+  `alternative_weekdays` and the patterns above. It reports separately where croner-py follows
+  croner-rust instead of croner (JS).
 
 ## 1.1.0
 

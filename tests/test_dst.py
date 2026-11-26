@@ -290,8 +290,35 @@ def test_previous_runs_stop_at_year_one():
     assert Cron("* * * * * *", interval=10, timezone="UTC").previous_runs(1, "0001-01-01T00:00:05Z") == []
 
 
+# A fixed-time run in a gap runs at its end if that date matches the pattern, as in croner-rust
+
+
 def test_fixed_time_in_gap_of_a_whole_day():
-    # Samoa skipped 2011-12-30. Like croner (JS), the run at 12:00 that day is not moved to the
-    # next day.
+    # Samoa skipped 2011-12-30: 12:00 that day runs when the gap ends, at 2011-12-31 00:00 +14:00
     job = Cron("0 12 * * *", timezone="Pacific/Apia")
-    assert iso(job.next_runs(2, "2011-12-29T00:00:00Z")) == ["2011-12-29T22:00:00Z", "2011-12-30T22:00:00Z"]
+    assert iso(job.next_runs(3, "2011-12-29T00:00:00Z")) == [
+        "2011-12-29T22:00:00Z",
+        "2011-12-30T10:00:00Z",
+        "2011-12-30T22:00:00Z",
+    ]
+    assert iso(job.previous_runs(4, "2012-01-02T00:00:00Z")) == [
+        "2012-01-01T22:00:00Z",
+        "2011-12-31T22:00:00Z",
+        "2011-12-30T22:00:00Z",
+        "2011-12-30T10:00:00Z",
+    ]
+    # Restricted to the 30th, the end of the gap does not match, so the next run is a month later
+    job = Cron("0 12 30 * *", timezone="Pacific/Apia")
+    assert iso(job.next_runs(1, "2011-12-29T00:00:00Z")) == ["2012-01-29T22:00:00Z"]
+
+
+def test_fixed_time_in_gap_ending_at_midnight():
+    # Nuuk went from -02 to -01 at 23:00 on 2024-03-30, the gap ends at midnight
+    job = Cron("30 23 * * *", timezone="America/Nuuk")
+    assert iso(job.next_runs(3, "2024-03-30T12:00:00Z")) == [
+        "2024-03-31T01:00:00Z",  # 00:00 on the 31st
+        "2024-04-01T00:30:00Z",
+        "2024-04-02T00:30:00Z",
+    ]
+    job = Cron("30 23 30 * *", timezone="America/Nuuk")
+    assert iso(job.next_runs(1, "2024-03-29T12:00:00Z")) == ["2024-05-01T00:30:00Z"]

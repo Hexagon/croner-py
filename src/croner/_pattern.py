@@ -231,23 +231,16 @@ class CronPattern:
         # OCPS 1.4: '?' is an alias for '*'
         parts = [p.replace("?", "*") for p in parts]
 
-        # L / LW in day-of-month
-        if parts[3].upper() == "LW":
-            self.last_weekday = True
-            parts[3] = ""
-        elif "L" in parts[3].upper():
-            # L is a value of its own: "L", "15,L" or "L,15"
+        # L and LW in day-of-month are values of their own: "L", "LW", "15,L" or "L,LW"
+        if "L" in parts[3].upper():
             items = parts[3].split(",")
-            if len(items) > 1 and any(item.upper() == "LW" for item in items):
+            if any(item == "" or (item.upper() not in ("L", "LW") and "L" in item.upper()) for item in items):
                 raise CronError(
-                    f"Syntax error, LW can not be in a list in day-of-month ('{parts[3]}')."
+                    f"Syntax error, L and LW have to be values of their own in day-of-month ('{parts[3]}')."
                 )
-            if any(item == "" or (item.upper() != "L" and "L" in item.upper()) for item in items):
-                raise CronError(
-                    f"Syntax error, L has to be a value of its own in day-of-month ('{parts[3]}')."
-                )
-            parts[3] = ",".join(item for item in items if item.upper() != "L")
-            self.last_day_of_month = True
+            self.last_day_of_month = any(item.upper() == "L" for item in items)
+            self.last_weekday = any(item.upper() == "LW" for item in items)
+            parts[3] = ",".join(item for item in items if item.upper() not in ("L", "LW"))
 
         if parts[3] == "*":
             self.star_dom = True
@@ -438,10 +431,31 @@ class CronPattern:
         lower = int(m.group(1)) + offset
         upper = int(m.group(2)) + offset
         steps = int(m.group(3))
+        if self._wraps(kind, lower, upper):
+            self._validate_range(0, 6, steps, kind, conf)
+            self.steps[kind] = steps
+            self._set_wrapped_range(lower, upper, steps, nth if nth is not None else default)
+            return
         self._validate_range(lower, upper, steps, kind, conf)
         self.steps[kind] = steps
         for i in range(lower, upper + 1, steps):
             self._set_part(kind, i, nth if nth is not None else default)
+
+    def _wraps(self, kind: str, lower: int, upper: int) -> bool:
+        """With Quartz-style weekdays, a day-of-week range whose end is before its start
+        wraps around the week, as in Quartz and croner-rust: ``SAT-SUN`` (``7-1``) is
+        Saturday and Sunday, ``FRI-MON`` is Friday to Monday."""
+        return (
+            kind == "day_of_week"
+            and self.alternative_weekdays
+            and lower > upper
+            and lower <= 6
+            and upper >= 0
+        )
+
+    def _set_wrapped_range(self, lower: int, upper: int, steps: int, value: _Nth) -> None:
+        for i in range(lower, upper + 7 + 1, steps):
+            self._set_part("day_of_week", i - 7 if i > 6 else i, value)
 
     def _handle_range(self, conf: str, kind: str, offset: int, default: int) -> None:
         if "W" in conf.upper():
@@ -452,6 +466,9 @@ class CronPattern:
             raise CronError(f"Syntax error, illegal range: '{conf}'")
         lower = _int(split[0], "lower range", conf) + offset
         upper = _int(split[1], "upper range", conf) + offset
+        if self._wraps(kind, lower, upper):
+            self._set_wrapped_range(lower, upper, 1, nth if nth is not None else default)
+            return
         self._validate_range(lower, upper, None, kind, conf)
         for i in range(lower, upper + 1):
             self._set_part(kind, i, nth if nth is not None else default)

@@ -340,6 +340,40 @@ def test_ranges_ending_on_sunday_are_unchanged():
     assert CronPattern("0 0 * * 0-7").values("day_of_week") == list(range(7))
 
 
+@pytest.mark.parametrize(
+    "pattern,expected",
+    [
+        ("0 0 * * SAT-SUN", [0, 6]),
+        ("0 0 * * 7-1", [0, 6]),
+        ("0 0 * * MON-SUN", list(range(7))),
+        ("0 0 * * FRI-MON", [0, 1, 5, 6]),
+        ("0 0 * * FRI-TUE/2", [0, 2, 5]),
+        ("0 0 * * SUN-SAT", list(range(7))),
+    ],
+)
+def test_quartz_ranges_wrap_around_the_week(pattern, expected):
+    # As in Quartz and croner-rust
+    assert CronPattern(pattern, alternative_weekdays=True).values("day_of_week") == expected
+
+
+def test_quartz_wrapping_range_runs():
+    assert runs("0 0 * * FRI-TUE/2", 3, "2025-01-01T00:00:00Z", alternative_weekdays=True) == [
+        "2025-01-03 00:00:00",
+        "2025-01-05 00:00:00",
+        "2025-01-07 00:00:00",
+    ]
+    assert CronPattern("0 0 * * FRI-SUN#2", alternative_weekdays=True).day_of_week == [2, 0, 0, 0, 0, 2, 2]
+
+
+@pytest.mark.parametrize("pattern", ["0 0 * * SAT-SUN", "0 0 * * 5-1", "0 0 * * FRI-TUE/2"])
+def test_standard_ranges_do_not_wrap(pattern):
+    if pattern == "0 0 * * SAT-SUN":
+        assert CronPattern(pattern).values("day_of_week") == [0, 6]  # SUN is 7 here
+        return
+    with pytest.raises(CronError, match="larger than"):
+        CronPattern(pattern)
+
+
 @pytest.mark.parametrize("pattern", ["0 0 * * 8", "0 0 * * 1-8", "0 0 * * 0"])
 def test_quartz_weekdays_are_1_to_7(pattern):
     with pytest.raises(CronError, match="day_of_week"):
@@ -348,16 +382,32 @@ def test_quartz_weekdays_are_1_to_7(pattern):
     assert CronPattern("0 0 * * 7", alternative_weekdays=True).values("day_of_week") == [6]
 
 
-@pytest.mark.parametrize("pattern", ["0 0 5L * *", "0 0 L5 * *", "0 0 LL * *", "0 0 1,5L * *", "0 0 L, * *"])
+@pytest.mark.parametrize(
+    "pattern", ["0 0 5L * *", "0 0 L5 * *", "0 0 LL * *", "0 0 1,5L * *", "0 0 L, * *", "0 0 LW-5 * *", "0 0 5LW * *"]
+)
 def test_l_is_a_value_of_its_own_in_day_of_month(pattern):
-    with pytest.raises(CronError, match="L has to be a value of its own"):
+    with pytest.raises(CronError, match="L and LW have to be values of their own"):
         CronPattern(pattern)
 
 
-@pytest.mark.parametrize("pattern", ["0 0 L,LW * *", "0 0 LW,L * *", "0 0 1W,15W,LW * *"])
-def test_lw_can_not_be_in_a_list(pattern):
-    with pytest.raises(CronError, match="LW can not be in a list"):
-        CronPattern(pattern)
+def test_lw_in_a_list():
+    # As in croner-rust: L and LW keep both meanings in a list
+    p = CronPattern("0 0 L,LW * *")
+    assert p.last_day_of_month and p.last_weekday
+    # May 2025 ends on a Saturday: the last weekday is Friday the 30th
+    assert runs("0 0 L,LW * *", ref="2025-05-01T00:00:00Z") == [
+        "2025-05-30 00:00:00",
+        "2025-05-31 00:00:00",
+        "2025-06-30 00:00:00",
+    ]
+    assert runs("0 0 lw,l * *", ref="2025-05-01T00:00:00Z") == runs("0 0 L,LW * *", ref="2025-05-01T00:00:00Z")
+    assert runs("0 0 1W,15W,LW * *", ref="2025-01-01T00:00:00Z") == [
+        "2025-01-15 00:00:00",
+        "2025-01-31 00:00:00",
+        "2025-02-03 00:00:00",
+    ]
+    p = CronPattern("0 0 LW * *")
+    assert p.last_weekday and not p.last_day_of_month
 
 
 def test_l_in_a_list():

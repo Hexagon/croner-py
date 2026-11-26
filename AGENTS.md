@@ -7,7 +7,8 @@ croner-py is the Python flavor of [croner](https://github.com/hexagon/croner) (J
 evaluates cron patterns and schedules functions.
 
 The three libraries should parse the same patterns and schedule the same runs. When in doubt, croner (JS)
-is the reference for behavior and options, translated to snake_case.
+is the reference for behavior and options, translated to snake_case. Where croner (JS) and croner-rust
+disagree, `docs/plan-2.0.md` lists which one croner-py follows in each case.
 
 ## Philosophy
 
